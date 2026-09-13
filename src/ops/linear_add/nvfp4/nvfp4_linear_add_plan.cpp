@@ -14,9 +14,27 @@ enum class Nvfp4LinearAddRoute : std::uint8_t {
     W4A4,
 };
 
+bool is_27b_residual(std::int32_t output_rows, std::int32_t input_rows) {
+    return output_rows == Nvfp4Residual6144Geometry::kOutputRows &&
+           (input_rows == Nvfp4Residual6144Geometry::kInputRows ||
+            input_rows == Nvfp4Residual17408Geometry::kInputRows);
+}
+
+bool is_ornith_down(std::int32_t output_rows, std::int32_t input_rows) {
+    return output_rows == Nvfp4MlpDown12288Geometry::kOutputRows &&
+           input_rows == Nvfp4MlpDown12288Geometry::kInputRows;
+}
+
 Nvfp4LinearAddRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows,
                                   LinearPolicy policy, std::int32_t tokens) {
-    if (tokens <= 0 || output_rows != 5120 || (input_rows != 6144 && input_rows != 17408)) {
+    if (tokens <= 0) { throw std::invalid_argument("nvfp4 linear_add: unsupported shape"); }
+    if (is_ornith_down(output_rows, input_rows)) {
+        if (policy != LinearPolicy::A16Only) {
+            throw std::invalid_argument("nvfp4 linear_add: Ornith down admits only A16");
+        }
+        return Nvfp4LinearAddRoute::A16;
+    }
+    if (!is_27b_residual(output_rows, input_rows)) {
         throw std::invalid_argument("nvfp4 linear_add: unsupported shape");
     }
     if (policy == LinearPolicy::A16Only) { return Nvfp4LinearAddRoute::A16; }
@@ -28,7 +46,8 @@ Nvfp4LinearAddRoute resolve_route(std::int32_t output_rows, std::int32_t input_r
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& residual, cudaStream_t stream) {
-    constexpr std::int32_t kChunk = kNvfp4LastSmallT;
+    const std::int32_t kChunk = is_ornith_down(weight.n, weight.k) ? kNvfp4OrnithLastSmallT
+                                                                  : kNvfp4LastSmallT;
     for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += kChunk) {
         const std::int32_t active = std::min(kChunk, x.ne[1] - token_begin);
         auto* input               = static_cast<std::uint8_t*>(x.data) +

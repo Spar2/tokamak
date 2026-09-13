@@ -313,6 +313,7 @@ std::size_t Variant::attention_projection_workspace_capacity_bytes(WeightsProfil
     validate_token_interval(first, last);
     switch (weights_profile) {
     case WeightsProfile::GroupwiseInt:
+    case WeightsProfile::Nvfp4Mlp:
         return 0;
     }
     throw std::logic_error("invalid 9B weights profile");
@@ -324,6 +325,7 @@ std::size_t Variant::attention_output_projection_workspace_capacity_bytes(
     validate_token_interval(first, last);
     switch (weights_profile) {
     case WeightsProfile::GroupwiseInt:
+    case WeightsProfile::Nvfp4Mlp:
         return ops::linear_add_workspace_capacity_bytes(QType::Q5G64_F16S, TextConfig::hidden,
                                                         TextConfig::query_size,
                                                         ops::LinearPolicy::A16Only, first, last);
@@ -338,6 +340,7 @@ std::size_t Variant::gdn_input_projection_workspace_capacity_bytes(WeightsProfil
     validate_token_interval(first, last);
     switch (weights_profile) {
     case WeightsProfile::GroupwiseInt:
+    case WeightsProfile::Nvfp4Mlp:
         return 0;
     }
     throw std::logic_error("invalid 9B weights profile");
@@ -349,6 +352,7 @@ std::size_t Variant::gdn_input_projection_snapshot_workspace_capacity_bytes(
     validate_token_interval(first, last);
     switch (weights_profile) {
     case WeightsProfile::GroupwiseInt:
+    case WeightsProfile::Nvfp4Mlp:
         return ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
             TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch_size, first,
             last);
@@ -362,6 +366,7 @@ std::size_t Variant::gdn_input_projection_record_workspace_capacity_bytes(
     validate_token_interval(first, last);
     switch (weights_profile) {
     case WeightsProfile::GroupwiseInt:
+    case WeightsProfile::Nvfp4Mlp:
         return ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
             TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch_size, first,
             last);
@@ -376,6 +381,7 @@ std::size_t Variant::gdn_output_projection_workspace_capacity_bytes(WeightsProfi
     validate_token_interval(first, last);
     switch (weights_profile) {
     case WeightsProfile::GroupwiseInt:
+    case WeightsProfile::Nvfp4Mlp:
         return ops::linear_add_workspace_capacity_bytes(QType::Q5G64_F16S, TextConfig::hidden,
                                                         TextConfig::value_dim,
                                                         ops::LinearPolicy::A16Only, first, last);
@@ -394,25 +400,30 @@ std::size_t Variant::post_mixer_workspace_capacity_bytes(WeightsProfile weights_
                                                          qwen3_6::TextPhase,
                                                          std::int32_t first, std::int32_t last) {
     validate_token_interval(first, last);
+    const ops::LinearPolicy policy = ops::LinearPolicy::A16Only;
+    QType gate_up_qtype            = QType::Q4G64_F16S;
+    QType down_qtype               = QType::Q5G64_F16S;
     switch (weights_profile) {
     case WeightsProfile::GroupwiseInt:
+        break;
+    case WeightsProfile::Nvfp4Mlp:
+        gate_up_qtype = QType::NVFP4;
+        down_qtype    = QType::NVFP4;
         break;
     default:
         throw std::invalid_argument("qwen3_5_9b: invalid weights profile");
     }
-    const ops::LinearPolicy policy = ops::LinearPolicy::A16Only;
     WorkspaceLayoutBuilder layout;
     (void)layout.alloc(DType::BF16, {TextConfig::intermediate, last});
     {
         auto scope = layout.scope();
         (void)layout.alloc_bytes(ops::linear_swiglu_workspace_capacity_bytes(
-            QType::Q4G64_F16S, 2 * TextConfig::intermediate, TextConfig::hidden, policy, first,
-            last));
+            gate_up_qtype, 2 * TextConfig::intermediate, TextConfig::hidden, policy, first, last));
     }
     {
         auto scope = layout.scope();
         (void)layout.alloc_bytes(ops::linear_add_workspace_capacity_bytes(
-            QType::Q5G64_F16S, TextConfig::hidden, TextConfig::intermediate, policy, first, last));
+            down_qtype, TextConfig::hidden, TextConfig::intermediate, policy, first, last));
     }
     return layout.peak_bytes(1);
 }

@@ -43,6 +43,12 @@ void launch_nvfp4_decode(const Tensor& x, const Weight& weight, Tensor& out, cud
     case Nvfp4Problem::MlpGateUp:
         launch_exact<Nvfp4MlpGateUpGeometry>(x, weight, out, stream);
         return;
+    case Nvfp4Problem::MlpGateUp4096:
+        launch_exact<Nvfp4MlpGateUp4096Geometry>(x, weight, out, stream);
+        return;
+    case Nvfp4Problem::MlpDown12288:
+        launch_exact<Nvfp4MlpDown12288Geometry>(x, weight, out, stream);
+        return;
     case Nvfp4Problem::Residual6144:
         launch_exact<Nvfp4Residual6144Geometry>(x, weight, out, stream);
         return;
