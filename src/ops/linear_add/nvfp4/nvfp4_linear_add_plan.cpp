@@ -1,6 +1,7 @@
 #include "ops/linear_add/nvfp4/nvfp4_linear_add_plan.h"
 
 #include "ops/linear/nvfp4/nvfp4_config.h"
+#include "ops/linear/nvfp4/nvfp4_launch.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -46,6 +47,10 @@ Nvfp4LinearAddRoute resolve_route(std::int32_t output_rows, std::int32_t input_r
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& residual, cudaStream_t stream) {
+    if (is_ornith_down(weight.n, weight.k) && x.ne[1] >= kNvfp4OrnithMmaMinT) {
+        launch_nvfp4_w4a16_mma_add(x, weight, residual, stream);
+        return;
+    }
     const std::int32_t kChunk = is_ornith_down(weight.n, weight.k) ? kNvfp4OrnithLastSmallT
                                                                   : kNvfp4LastSmallT;
     for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += kChunk) {

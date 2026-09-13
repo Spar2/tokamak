@@ -109,6 +109,9 @@ int run_shape(std::int32_t n, std::int32_t k, std::uint32_t seed, bool allow_a4)
         Invocation{8, ops::LinearPolicy::A16Only},
         Invocation{16, ops::LinearPolicy::A16Only},
         Invocation{32, ops::LinearPolicy::A16Only},
+        Invocation{64, ops::LinearPolicy::A16Only},
+        Invocation{128, ops::LinearPolicy::A16Only},
+        Invocation{129, ops::LinearPolicy::A16Only},
     };
     const Invocation* invocations     = allow_a4 ? invocations_a4.data() : invocations_a16.data();
     const std::size_t invocation_count = allow_a4 ? invocations_a4.size() : invocations_a16.size();

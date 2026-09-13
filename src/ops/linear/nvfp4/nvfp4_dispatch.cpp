@@ -44,6 +44,10 @@ Nvfp4LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+    if (is_ornith_nvfp4_mlp(weight.n, weight.k) && x.ne[1] >= kNvfp4OrnithMmaMinT) {
+        launch_nvfp4_w4a16_mma(x, weight, out, stream);
+        return;
+    }
     const std::int32_t kChunk = is_ornith_nvfp4_mlp(weight.n, weight.k) ? kNvfp4OrnithLastSmallT
                                                                        : kNvfp4LastSmallT;
     for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += kChunk) {

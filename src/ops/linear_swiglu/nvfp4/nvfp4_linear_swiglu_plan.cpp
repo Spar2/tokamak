@@ -4,6 +4,7 @@
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/silu_mul.h"
 #include "ops/linear/nvfp4/nvfp4_config.h"
+#include "ops/linear/nvfp4/nvfp4_launch.h"
 #include "ops/linear/nvfp4/nvfp4_w4a4_plan.h"
 #include "ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_w4a4_tma_launch.h"
 
@@ -133,6 +134,10 @@ void nvfp4_ornith_mlp_linear_swiglu_dispatch(const Tensor& x, const Weight& weig
         nvfp4_linear_swiglu_small_t_launch(x, weight, out, stream);
         return;
     }
+    if (tokens >= kNvfp4OrnithMmaMinT) {
+        launch_nvfp4_w4a16_mma_swiglu(x, weight, out, stream);
+        return;
+    }
     constexpr std::int32_t kIntermediate = Nvfp4MlpGateUp4096Geometry::kOutputRows / 2;
     for (std::int32_t token_begin = 0; token_begin < tokens;
          token_begin += kNvfp4OrnithLastSmallT) {
@@ -143,11 +148,7 @@ void nvfp4_ornith_mlp_linear_swiglu_dispatch(const Tensor& x, const Weight& weig
                        static_cast<std::int64_t>(token_begin) * kIntermediate * sizeof(std::uint16_t);
         Tensor input_chunk(input, DType::BF16, {weight.k, active});
         Tensor output_chunk(output, DType::BF16, {kIntermediate, active});
-        if (active == 1) {
-            nvfp4_linear_swiglu_decode_launch(input_chunk, weight, output_chunk, stream);
-        } else {
-            nvfp4_linear_swiglu_small_t_launch(input_chunk, weight, output_chunk, stream);
-        }
+        nvfp4_linear_swiglu_small_t_launch(input_chunk, weight, output_chunk, stream);
     }
 }
 

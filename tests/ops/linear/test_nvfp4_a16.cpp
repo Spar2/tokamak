@@ -25,6 +25,15 @@ int run_nvfp4_a16() {
         Invocation{4, CallForm::Policy, ops::LinearPolicy::A16Only},
         Invocation{16, CallForm::Policy, ops::LinearPolicy::A16Only},
     };
+    constexpr std::array ornith_invocations{
+        Invocation{1, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{4, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{16, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{32, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{64, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{128, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{129, CallForm::Policy, ops::LinearPolicy::A16Only},
+    };
     int failures = 0;
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
                           {14336, 5120, 701U, Comparison::Sampled, true, attn_invocations});
@@ -37,9 +46,9 @@ int run_nvfp4_a16() {
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
                           {5120, 17408, 707U, Comparison::Sampled, true, new_problem_invocations});
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
-                          {24576, 4096, 709U, Comparison::Sampled, true, new_problem_invocations});
+                          {24576, 4096, 709U, Comparison::Sampled, true, ornith_invocations});
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
-                          {4096, 12288, 711U, Comparison::Sampled, true, new_problem_invocations});
+                          {4096, 12288, 711U, Comparison::Sampled, true, ornith_invocations});
     return failures;
 }
 

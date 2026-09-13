@@ -190,6 +190,10 @@ inline constexpr std::int32_t kNvfp4FirstSmallT = 2;
 inline constexpr std::int32_t kNvfp4LastSmallT  = 32;
 // Ornith MLP A16 is validated through T=16. T=32 on 24576x4096 failed numeric checks.
 inline constexpr std::int32_t kNvfp4OrnithLastSmallT = 16;
+// First T where W4A16 BF16-MMA is used for Ornith MLP. Measured crossover vs tiled
+// small-T A16 is between 16 and 32 on RTX 5060 Ti.
+inline constexpr std::int32_t kNvfp4OrnithMmaMinT = 32;
+inline constexpr std::int32_t kNvfp4OrnithSwigluMmaTile = 128;
 
 inline constexpr bool is_ornith_nvfp4_mlp(std::int32_t output_rows, std::int32_t input_rows) {
     return (output_rows == Nvfp4MlpGateUp4096Geometry::kOutputRows &&

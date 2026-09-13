@@ -15,7 +15,7 @@ int main() {
         failures += run_profile("LinearSwiGLU NVFP4_A16",
                                 {QType::NVFP4, 34816, 5120, 17408, 1801U, ActivationCompute::A16},
                                 kA16Cases);
-        constexpr std::array<std::int32_t, 4> kOrnithA16Cases{1, 4, 8, 16};
+        constexpr std::array<std::int32_t, 7> kOrnithA16Cases{1, 4, 8, 16, 32, 64, 128};
         failures += run_profile("LinearSwiGLU NVFP4_A16_Ornith",
                                 {QType::NVFP4, 24576, 4096, 12288, 1805U, ActivationCompute::A16},
                                 kOrnithA16Cases);
