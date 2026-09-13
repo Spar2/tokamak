@@ -21,8 +21,12 @@ def test_reader_decodes_nvfp4_blocks_and_fp8_scalar_scales(tmp_path) -> None:
     }
     save_file(tensors, tmp_path / "model.safetensors")
     with OrnithShardReader(tmp_path) as reader:
+        packed = reader.get_raw("nv.weight")
         nvfp4 = reader.get("nv.weight")
         fp8 = reader.get("fp.weight")
+    assert packed.dtype == torch.uint8
+    assert tuple(packed.shape) == (1, 8)
+    torch.testing.assert_close(packed, nvfp4_codes, atol=0.0, rtol=0.0)
 
     assert nvfp4.dtype == torch.bfloat16
     assert tuple(nvfp4.shape) == (1, 16)
