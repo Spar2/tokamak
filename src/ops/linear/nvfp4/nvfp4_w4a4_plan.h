@@ -56,4 +56,17 @@ void launch_nvfp4_w4a4_quantize(const Tensor& x, const Weight& weight, Nvfp4W4a4
 void launch_nvfp4_w4a4(const Tensor& x, const Weight& weight, Tensor& out,
                        Nvfp4W4a4Workspace workspace, cudaStream_t stream);
 
+// Ornith dynamic W4A4: per-K16 max_abs activation quant with d_x=1, alpha=1/d_w.
+// Does not read weight.input_scale_divisor.
+void launch_nvfp4_dynamic_w4a4_quantize(const Tensor& x, Nvfp4W4a4Workspace workspace,
+                                        cudaStream_t stream);
+void launch_nvfp4_dynamic_w4a4_mma(const Tensor& x, const Weight& weight, Tensor& out,
+                                   Nvfp4W4a4Workspace workspace, cudaStream_t stream);
+void launch_nvfp4_dynamic_w4a4(const Tensor& x, const Weight& weight, Tensor& out,
+                               Nvfp4W4a4Workspace workspace, cudaStream_t stream);
+void launch_nvfp4_dynamic_w4a4_add(const Tensor& x, const Weight& weight, Tensor& residual,
+                                   Nvfp4W4a4Workspace workspace, cudaStream_t stream);
+void launch_nvfp4_dynamic_w4a4_swiglu(const Tensor& x, const Weight& weight, Tensor& out,
+                                      Nvfp4W4a4Workspace workspace, cudaStream_t stream);
+
 } // namespace ninfer::ops::detail

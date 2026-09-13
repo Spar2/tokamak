@@ -107,6 +107,14 @@ void launch_nvfp4_w4a4_tma_linear(Nvfp4Problem problem, const std::uint8_t* acti
             Nvfp4IdentityEpilogue{},
             Nvfp4ContiguousOutput{output, Nvfp4MlpGateUpGeometry::kOutputRows}, stream);
         return;
+    case Nvfp4Problem::MlpGateUp4096:
+        launch_linear<Nvfp4MlpGateUp4096Geometry>(activation_codes, activation_scales, weight_codes,
+                                                  weight_scales, output, tokens, alpha, stream);
+        return;
+    case Nvfp4Problem::MlpDown12288:
+        launch_linear<Nvfp4MlpDown12288Geometry>(activation_codes, activation_scales, weight_codes,
+                                                 weight_scales, output, tokens, alpha, stream);
+        return;
     case Nvfp4Problem::Residual6144:
         launch_linear<Nvfp4Residual6144Geometry>(activation_codes, activation_scales, weight_codes,
                                                  weight_scales, output, tokens, alpha, stream);
@@ -166,10 +174,16 @@ void launch_nvfp4_w4a4_tma_linear_add(Nvfp4Problem problem, const std::uint8_t* 
                                                       weight_codes, weight_scales, residual, tokens,
                                                       alpha, stream);
         return;
+    case Nvfp4Problem::MlpDown12288:
+        launch_linear_add<Nvfp4MlpDown12288Geometry>(activation_codes, activation_scales,
+                                                     weight_codes, weight_scales, residual, tokens,
+                                                     alpha, stream);
+        return;
     case Nvfp4Problem::AttnInput:
     case Nvfp4Problem::GdnInput:
     case Nvfp4Problem::MlpGateUp:
-        return;
+    case Nvfp4Problem::MlpGateUp4096:
+        throw std::invalid_argument("nvfp4 W4A4 TMA linear_add: unsupported problem");
     }
 }
 

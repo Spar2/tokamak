@@ -33,7 +33,8 @@ Nvfp4LinearAddRoute resolve_route(std::int32_t output_rows, std::int32_t input_r
         if (policy != LinearPolicy::A16Only) {
             throw std::invalid_argument("nvfp4 linear_add: Ornith down admits only A16");
         }
-        return Nvfp4LinearAddRoute::A16;
+        return use_ornith_dynamic_w4a4(tokens) ? Nvfp4LinearAddRoute::W4A4
+                                               : Nvfp4LinearAddRoute::A16;
     }
     if (!is_27b_residual(output_rows, input_rows)) {
         throw std::invalid_argument("nvfp4 linear_add: unsupported shape");
@@ -93,6 +94,10 @@ void nvfp4_linear_add_dispatch(const Tensor& x, const Weight& weight, Tensor& re
     }
     auto scope                       = workspace.scope();
     const Nvfp4W4a4Workspace scratch = allocate_nvfp4_w4a4_workspace(workspace, x.ne[1], weight.k);
+    if (is_ornith_down(weight.n, weight.k)) {
+        launch_nvfp4_dynamic_w4a4_add(x, weight, residual, scratch, stream);
+        return;
+    }
     nvfp4_linear_add_w4a4_launch(x, weight, residual, scratch, stream);
 }
 

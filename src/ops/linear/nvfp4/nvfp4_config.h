@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 
 namespace ninfer::ops::detail {
@@ -118,6 +120,7 @@ using Nvfp4Residual17408Geometry = Nvfp4GemvGeometry<5120, 17408>;
 using Nvfp4Activation5120Geometry  = Nvfp4ActivationGeometry<5120>;
 using Nvfp4Activation4096Geometry  = Nvfp4ActivationGeometry<4096>;
 using Nvfp4Activation6144Geometry  = Nvfp4ActivationGeometry<6144>;
+using Nvfp4Activation12288Geometry = Nvfp4ActivationGeometry<12288>;
 using Nvfp4Activation17408Geometry = Nvfp4ActivationGeometry<17408>;
 
 enum class Nvfp4Problem : std::uint8_t {
@@ -194,6 +197,32 @@ inline constexpr std::int32_t kNvfp4OrnithLastSmallT = 16;
 // small-T A16 is between 16 and 32 on RTX 5060 Ti.
 inline constexpr std::int32_t kNvfp4OrnithMmaMinT = 32;
 inline constexpr std::int32_t kNvfp4OrnithSwigluMmaTile = 128;
+
+// Dynamic W4A4 activation contract (Ornith experiment, independent of the artifact):
+// each token-column is quantized in K16 groups. scale_e4m3 = sat(max_abs(K16)/6),
+// codes = e2m1(x / decode(scale)). Runtime d_x is identically 1 (no extra global
+// scale). Artifact input_scale_divisor is never read. GEMM alpha = 1/d_w.
+inline constexpr float kNvfp4DynamicPerK16Dx = 1.0F;
+inline constexpr std::int32_t kNvfp4OrnithDynamicW4a4MinT = 128;
+
+// Host-only experimental gate. NINFER_ORNITH_DYNAMIC_W4A4=1 enables the
+// runtime-quantized W4A4 route for Ornith MLP at T >= MinT. Default off so
+// A16 and W4A16 BF16-MMA remain the known-good production paths.
+inline bool ornith_dynamic_w4a4_requested() {
+#if defined(__CUDA_ARCH__)
+    return false;
+#else
+    static const bool enabled = [] {
+        const char* value = std::getenv("NINFER_ORNITH_DYNAMIC_W4A4");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+#endif
+}
+
+inline bool use_ornith_dynamic_w4a4(std::int32_t tokens) {
+    return ornith_dynamic_w4a4_requested() && tokens >= kNvfp4OrnithDynamicW4a4MinT;
+}
 
 inline constexpr bool is_ornith_nvfp4_mlp(std::int32_t output_rows, std::int32_t input_rows) {
     return (output_rows == Nvfp4MlpGateUp4096Geometry::kOutputRows &&

@@ -28,6 +28,7 @@
 
 #include "core/device.h"
 #include "ninfer_bench_common.h"
+#include "ops/linear/nvfp4/nvfp4_w4a4_plan.h"
 #include "quantized_weight.cuh"
 
 #include <nlohmann/json.hpp>
@@ -476,6 +477,71 @@ int main(int argc, char** argv) {
         } catch (const std::exception& e) {
             std::printf("NVFP4-W4A16 FAILED: %s\n", e.what());
             std::printf("gate: src/ops/linear/nvfp4/nvfp4_config.h (MlpGateUp4096/MlpDown12288)\n");
+        }
+
+        // ---- side C: dynamic W4A4 (runtime per-K16 quant + FP4 MMA) ----
+        try {
+            const std::size_t w4a4_ws =
+                ninfer::ops::detail::nvfp4_w4a4_workspace_capacity_bytes(max_t, kK);
+            WorkspaceArena w4a4_arena(std::max<std::size_t>(w4a4_ws, 256));
+            const auto scratch =
+                ninfer::ops::detail::allocate_nvfp4_w4a4_workspace(w4a4_arena, max_t, kK);
+            cudaEvent_t eq0 = nullptr, eq1 = nullptr, em1 = nullptr;
+            CUDA_CHECK(cudaEventCreate(&eq0));
+            CUDA_CHECK(cudaEventCreate(&eq1));
+            CUDA_CHECK(cudaEventCreate(&em1));
+            for (const std::int32_t t : options.t_sweep) {
+                if (t < 32) { continue; }
+                std::vector<double> total_us, quant_us, mma_us;
+                total_us.reserve(static_cast<std::size_t>(options.repeat));
+                quant_us.reserve(static_cast<std::size_t>(options.repeat));
+                mma_us.reserve(static_cast<std::size_t>(options.repeat));
+                for (int i = 0; i < options.warmup; ++i) {
+                    Tensor x(input.p, DType::BF16, {kK, t});
+                    Tensor out(output.p, DType::BF16, {kN, t});
+                    ninfer::ops::detail::launch_nvfp4_dynamic_w4a4(x, nvfp4_w, out, scratch,
+                                                                   stream);
+                }
+                CUDA_CHECK(cudaStreamSynchronize(stream));
+                for (int i = 0; i < options.repeat; ++i) {
+                    bench::flush_l2(flush, stream);
+                    Tensor x(input.p, DType::BF16, {kK, t});
+                    Tensor out(output.p, DType::BF16, {kN, t});
+                    CUDA_CHECK(cudaEventRecord(eq0, stream));
+                    ninfer::ops::detail::launch_nvfp4_dynamic_w4a4_quantize(x, scratch, stream);
+                    CUDA_CHECK(cudaEventRecord(eq1, stream));
+                    ninfer::ops::detail::launch_nvfp4_dynamic_w4a4_mma(x, nvfp4_w, out, scratch,
+                                                                      stream);
+                    CUDA_CHECK(cudaEventRecord(em1, stream));
+                    CUDA_CHECK(cudaEventSynchronize(em1));
+                    float q_ms = 0.0F, t_ms = 0.0F, full_ms = 0.0F;
+                    CUDA_CHECK(cudaEventElapsedTime(&q_ms, eq0, eq1));
+                    CUDA_CHECK(cudaEventElapsedTime(&t_ms, eq1, em1));
+                    CUDA_CHECK(cudaEventElapsedTime(&full_ms, eq0, em1));
+                    quant_us.push_back(static_cast<double>(q_ms) * 1000.0);
+                    mma_us.push_back(static_cast<double>(t_ms) * 1000.0);
+                    total_us.push_back(static_cast<double>(full_ms) * 1000.0);
+                }
+                const bench::ColdTiming tm = bench::summarize_timings(total_us);
+                const bench::ColdTiming tq = bench::summarize_timings(quant_us);
+                const bench::ColdTiming tmma = bench::summarize_timings(mma_us);
+                const double sec   = tm.median_us * 1.0e-6;
+                const double flops = 2.0 * kN * kK * t;
+                const double bytes =
+                    static_cast<double>(payload) + 2.0 * (kK + kN) * t +
+                    static_cast<double>(t) * kK / 2.0 + static_cast<double>(t) * kK / 16.0;
+                std::printf("%-6d %-14s %11.3f %11.3f %11.3f %10.1f %10.2f %10.1f\n", t,
+                            "dyn-W4A4", tm.median_us, tm.min_us, tm.p95_us, bytes / sec / 1e9,
+                            flops / sec / 1e12, t / sec);
+                std::printf("%-6d %-14s %11.3f  (quant median)  mma_median=%11.3f  ws=%zu\n", t,
+                            "dyn-W4A4-split", tq.median_us, tmma.median_us, w4a4_ws);
+                rows.push_back({t, "dyn-W4A4", tm, bytes / sec / 1e9, flops / sec / 1e12, t / sec});
+            }
+            CUDA_CHECK(cudaEventDestroy(eq0));
+            CUDA_CHECK(cudaEventDestroy(eq1));
+            CUDA_CHECK(cudaEventDestroy(em1));
+        } catch (const std::exception& e) {
+            std::printf("dyn-W4A4 FAILED: %s\n", e.what());
         }
 
         if (!options.csv_out.empty()) {

@@ -118,13 +118,12 @@ std::size_t nvfp4_ornith_mlp_linear_swiglu_workspace_capacity_bytes(std::int32_t
     if (min_tokens <= 0 || max_tokens < min_tokens) {
         throw std::invalid_argument("nvfp4 ornith linear_swiglu workspace: invalid token interval");
     }
-    (void)max_tokens;
-    return 0;
+    if (!ornith_dynamic_w4a4_requested() || max_tokens < kNvfp4OrnithDynamicW4a4MinT) { return 0; }
+    return nvfp4_w4a4_workspace_capacity_bytes(max_tokens, Nvfp4MlpGateUp4096Geometry::kInputRows);
 }
 
 void nvfp4_ornith_mlp_linear_swiglu_dispatch(const Tensor& x, const Weight& weight, Tensor& out,
                                              WorkspaceArena& workspace, cudaStream_t stream) {
-    (void)workspace;
     const std::int32_t tokens = x.ne[1];
     if (tokens == 1) {
         nvfp4_linear_swiglu_decode_launch(x, weight, out, stream);
@@ -132,6 +131,13 @@ void nvfp4_ornith_mlp_linear_swiglu_dispatch(const Tensor& x, const Weight& weig
     }
     if (tokens <= kNvfp4OrnithLastSmallT) {
         nvfp4_linear_swiglu_small_t_launch(x, weight, out, stream);
+        return;
+    }
+    if (use_ornith_dynamic_w4a4(tokens)) {
+        auto scope                       = workspace.scope();
+        const Nvfp4W4a4Workspace scratch = allocate_nvfp4_w4a4_workspace(
+            workspace, tokens, Nvfp4MlpGateUp4096Geometry::kInputRows);
+        launch_nvfp4_dynamic_w4a4_swiglu(x, weight, out, scratch, stream);
         return;
     }
     if (tokens >= kNvfp4OrnithMmaMinT) {
