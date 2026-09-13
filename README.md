@@ -8,12 +8,13 @@ prompts through a local CLI or OpenAI-/Anthropic-compatible HTTP APIs. The runti
 specialized: one GPU, one resident model, and a startup-fixed capacity of one to eight active
 requests.
 
-NInfer supports seven artifact identities. The quick-start commands use Qwen3.8-27B NVFP4.
+NInfer supports eight artifact identities. The quick-start commands use Qwen3.8-27B NVFP4.
 
 | Model | Weights | Artifact | Download and model card |
 |---|---|---|---|
 | Qwen3.5-9B | `groupwise-int` | `qwen3_5_9b.ninfer` | [Qwen3.5-9B](https://huggingface.co/ruwwww/qwen3.5-9b-ninfer) |
 | Ornith-1.5-9B | `groupwise-int` | `ornith_1_5_9b.ninfer` | [Ornith-1.5-9B](https://huggingface.co/ruwwww/ornith-1.5-9b-ninfer) |
+| Ornith-1.5-9B | `nvfp4` | `ornith_1_5_9b_nvfp4.ninfer` | Official NVFP4 MLP mixed artifact (local convert) |
 | Qwen3.6-27B | `groupwise-int` | `qwen3_6_27b.ninfer` | [Qwen3.6-27B](https://huggingface.co/neroued/Qwen3.6-27B-NInfer) |
 | Qwen3.6-27B | `nvfp4` | `qwen3_6_27b_nvfp4.ninfer` | [Qwen3.6-27B NVFP4](https://huggingface.co/neroued/Qwen3.6-27B-nvfp4-NInfer) |
 | Qwen3.8-27B | `groupwise-int` | `qwen3_8_27b.ninfer` | [Qwen3.8-27B](https://huggingface.co/neroued/Qwen3.8-27B-NInfer) |
@@ -25,9 +26,10 @@ tokenizer, chat template, and media frontend resources required by its registere
 
 The Qwen3.5-9B artifact is a 4,096-wide, 32-layer dense model with 24 linear-attention and eight
 full-attention layers plus one MTP layer. Ornith-1.5-9B uses the same registered execution geometry
-and MTP route under target key `ornith_1_5_9b`; its converter dequantizes the official NVFP4/FP8
-source checkpoint to BF16 before applying the groupwise-int profile and preserves Ornith's
-ThinkingToggle frontend. See the [Qwen3.5-9B artifact reference](docs/maintainer/qwen3.5-9b-artifact.md)
+and MTP route under target key `ornith_1_5_9b`. The groupwise-int converter dequantizes the
+official NVFP4/FP8 source to BF16 before requantizing. The `nvfp4` identity keeps MLP
+`gate_up`/`down` as native W4A16 NVFP4 and leaves attention, GDN, MTP, and embeddings on the
+existing groupwise-int formats. Both preserve Ornith's ThinkingToggle frontend. See the [Qwen3.5-9B artifact reference](docs/maintainer/qwen3.5-9b-artifact.md)
 and [Ornith-1.5-9B artifact reference](docs/maintainer/ornith-1.5-9b-artifact.md).
 
 ## Quick start

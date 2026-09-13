@@ -44,11 +44,17 @@ python3 -m tools.convert.qwen3_6_35b_a3b.convert \
 python3 -m tools.convert.ornith_1_5_9b.convert \
   --model /path/to/Ornith-1.5-9B-NVFP4 \
   --out models/ornith_1_5_9b.ninfer
+
+python3 -m tools.convert.ornith_1_5_9b.convert_nvfp4 \
+  --model /path/to/Ornith-1.5-9B-NVFP4 \
+  --out models/ornith_1_5_9b_nvfp4.ninfer
 ```
 
-The Ornith converter accepts the official single-file NVFP4 checkpoint, decodes its NVFP4 and
-FP8 source weights to logical BF16 while reading shards, and then applies NInfer's registered
-`groupwise-int` quantization profile. It does not require the separate BF16 checkpoint.
+The groupwise-int Ornith converter accepts the official single-file NVFP4 checkpoint, decodes its
+NVFP4 and FP8 source weights to logical BF16 while reading shards, and then applies NInfer's
+registered `groupwise-int` quantization profile. `convert_nvfp4` keeps MLP `gate_up`/`down` as
+native packed NVFP4 (W4A16, placeholder input divisor 1.0) and leaves every other object on the
+groupwise-int path. Neither converter requires a separate BF16 checkpoint.
 
 Inspect either result:
 

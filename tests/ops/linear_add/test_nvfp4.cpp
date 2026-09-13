@@ -87,9 +87,9 @@ int verify_preserved(const GuardedDeviceBuffer& device, std::span<const std::uin
     return 1;
 }
 
-int run_shape(std::int32_t n, std::int32_t k, std::uint32_t seed) {
+int run_shape(std::int32_t n, std::int32_t k, std::uint32_t seed, bool allow_a4) {
     const std::int32_t first_a4 = k == 6144 ? 7 : 8;
-    const std::array invocations{
+    const std::array invocations_a4{
         Invocation{1, ops::LinearPolicy::A16Only},
         Invocation{4, ops::LinearPolicy::A16Only},
         Invocation{first_a4, ops::LinearPolicy::AllowA4},
@@ -103,6 +103,15 @@ int run_shape(std::int32_t n, std::int32_t k, std::uint32_t seed) {
         Invocation{128, ops::LinearPolicy::AllowA4},
         Invocation{129, ops::LinearPolicy::AllowA4},
     };
+    const std::array invocations_a16{
+        Invocation{1, ops::LinearPolicy::A16Only},
+        Invocation{4, ops::LinearPolicy::A16Only},
+        Invocation{8, ops::LinearPolicy::A16Only},
+        Invocation{16, ops::LinearPolicy::A16Only},
+        Invocation{32, ops::LinearPolicy::A16Only},
+    };
+    const Invocation* invocations     = allow_a4 ? invocations_a4.data() : invocations_a16.data();
+    const std::size_t invocation_count = allow_a4 ? invocations_a4.size() : invocations_a16.size();
     constexpr std::int32_t kMaximumTokens = 1024;
     quantized_weight::PatternedWeightOptions options;
     options.weight_scale_divisor = 0.125F;
@@ -122,7 +131,8 @@ int run_shape(std::int32_t n, std::int32_t k, std::uint32_t seed) {
     const Weight weight = host_weight.device_weight(device_weight.data());
 
     int failures = 0;
-    for (const Invocation invocation : invocations) {
+    for (std::size_t i = 0; i < invocation_count; ++i) {
+        const Invocation invocation = invocations[i];
         const std::size_t output_words = static_cast<std::size_t>(n) * invocation.tokens;
         GuardedDeviceBuffer output(output_words * sizeof(std::uint16_t));
         output.copy_from_host(initial_residual.data(), output.bytes());
@@ -210,8 +220,9 @@ int main() {
         return 77;
     }
     int failures = 0;
-    failures += run_shape(5120, 6144, 811U);
-    failures += run_shape(5120, 17408, 821U);
+    failures += run_shape(5120, 6144, 811U, true);
+    failures += run_shape(5120, 17408, 821U, true);
+    failures += run_shape(4096, 12288, 831U, false);
     std::cout << (failures == 0 ? "OK" : "FAIL") << " NVFP4 linear_add\n";
     return failures == 0 ? 0 : 1;
 }
