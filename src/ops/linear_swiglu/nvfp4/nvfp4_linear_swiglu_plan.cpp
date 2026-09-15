@@ -148,7 +148,12 @@ void nvfp4_ornith_mlp_linear_swiglu_dispatch(const Tensor& x, const Weight& weig
                        static_cast<std::int64_t>(token_begin) * kIntermediate * sizeof(std::uint16_t);
         Tensor input_chunk(input, DType::BF16, {weight.k, active});
         Tensor output_chunk(output, DType::BF16, {kIntermediate, active});
-        nvfp4_linear_swiglu_small_t_launch(input_chunk, weight, output_chunk, stream);
+        if (active == 1) {
+            // Small-T launchers start at T=2; a one-token tail must use decode.
+            nvfp4_linear_swiglu_decode_launch(input_chunk, weight, output_chunk, stream);
+        } else {
+            nvfp4_linear_swiglu_small_t_launch(input_chunk, weight, output_chunk, stream);
+        }
     }
 }
 

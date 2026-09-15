@@ -52,6 +52,11 @@ constexpr auto kMlpDown12288Launchers  = make_launchers<Nvfp4MlpDown12288Geometr
 
 void nvfp4_linear_add_small_t_launch(const Tensor& x, const Weight& weight, Tensor& residual,
                                      cudaStream_t stream) {
+    // Launcher tables cover T in [kNvfp4FirstSmallT, kNvfp4LastSmallT]; T=1
+    // must use the decode path. Fail loudly instead of indexing out of bounds.
+    if (x.ne[1] < kNvfp4FirstSmallT || x.ne[1] > kNvfp4LastSmallT) {
+        throw std::invalid_argument("nvfp4 linear_add small-t: unsupported token count");
+    }
     const std::size_t index = static_cast<std::size_t>(x.ne[1] - kNvfp4FirstSmallT);
     switch (resolve_nvfp4_problem(weight.n, weight.k)) {
     case Nvfp4Problem::Residual6144:
