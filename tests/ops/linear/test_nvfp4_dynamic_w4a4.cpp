@@ -84,7 +84,8 @@ std::vector<std::uint16_t> make_random(std::int32_t k, std::int32_t t, std::uint
 }
 
 int run_case(std::string_view label, std::int32_t n, std::int32_t k, std::int32_t t,
-             const std::vector<std::uint16_t>& host_x, std::uint32_t seed) {
+             const std::vector<std::uint16_t>& host_x, std::uint32_t seed,
+             std::int32_t row_stride = 1) {
     quantized_weight::PatternedWeightOptions options;
     options.weight_scale_divisor = 0.125F;
     options.input_scale_divisor  = 3.5F; // dummy; dynamic path must ignore this
@@ -94,13 +95,25 @@ int run_case(std::string_view label, std::int32_t n, std::int32_t k, std::int32_
     for (std::int32_t i = 0; i < n; ++i) { rows[static_cast<std::size_t>(i)] = i; }
     const std::vector<float> weight_f = quantized_weight::materialize_rows_fp32(packed, rows);
 
+    // Reference row subset (column-major [n,t] outputs): stride>1 verifies a
+    // strided row sample so large-T/TMA cases stay tractable on CPU.
+    if (row_stride < 1) { row_stride = 1; }
+    std::vector<std::int32_t> sel;
+    for (std::int32_t r = 0; r < n; r += row_stride) { sel.push_back(r); }
+    const std::int32_t rn = static_cast<std::int32_t>(sel.size());
+    std::vector<float> weight_sub(static_cast<std::size_t>(rn) * k);
+    for (std::size_t i = 0; i < sel.size(); ++i) {
+        const float* src = weight_f.data() + static_cast<std::size_t>(sel[i]) * k;
+        std::copy(src, src + k, weight_sub.data() + i * static_cast<std::size_t>(k));
+    }
+
     std::vector<float> act_f(static_cast<std::size_t>(k) * t);
     for (std::size_t i = 0; i < act_f.size(); ++i) {
         act_f[i] = bf16_to_f32(host_x[i]);
     }
-    std::vector<double> reference(static_cast<std::size_t>(n) * t);
-    ninfer::test::linear::cpu_linear_gemm_fp64(weight_f.data(), act_f.data(), reference.data(), n, k,
-                                               t);
+    std::vector<double> reference(static_cast<std::size_t>(rn) * t);
+    ninfer::test::linear::cpu_linear_gemm_fp64(weight_sub.data(), act_f.data(), reference.data(),
+                                               rn, k, t);
 
     GuardedDeviceBuffer dx(host_x.size() * sizeof(std::uint16_t));
     GuardedDeviceBuffer dy(static_cast<std::size_t>(n) * t * sizeof(std::uint16_t));
@@ -137,7 +150,29 @@ int run_case(std::string_view label, std::int32_t n, std::int32_t k, std::int32_
     for (std::size_t i = 0; i < actual.size(); ++i) {
         actual[i] = bf16_to_f32(host_y[i]);
     }
-    const ErrorStats stats = compare(actual, reference);
+    // Gather the reference row subset (column-major outputs: element (r,c) at c*n+r).
+    auto gather = [&](const std::vector<float>& full) {
+        std::vector<float> sub;
+        sub.reserve(static_cast<std::size_t>(rn) * t);
+        for (std::int32_t c = 0; c < t; ++c) {
+            for (const std::int32_t r : sel) {
+                sub.push_back(full[static_cast<std::size_t>(c) * n + r]);
+            }
+        }
+        return sub;
+    };
+    auto gatherd = [&](const std::vector<double>& full) {
+        std::vector<double> sub;
+        sub.reserve(static_cast<std::size_t>(rn) * t);
+        for (std::int32_t c = 0; c < t; ++c) {
+            for (const std::int32_t r : sel) {
+                sub.push_back(full[static_cast<std::size_t>(c) * n + r]);
+            }
+        }
+        return sub;
+    };
+    const std::vector<float> actual_sub = gather(actual);
+    const ErrorStats stats = compare(actual_sub, reference);
 
     GuardedDeviceBuffer dy16(static_cast<std::size_t>(n) * t * sizeof(std::uint16_t));
     Tensor y16(dy16.data(), DType::BF16, {n, t});
@@ -151,18 +186,20 @@ int run_case(std::string_view label, std::int32_t n, std::int32_t k, std::int32_
         a16[i]  = bf16_to_f32(host_y16[i]);
         a16d[i] = a16[i];
     }
-    const ErrorStats vs_a16 = compare(actual, a16d);
-    const ErrorStats a16_ref = compare(a16, reference);
-    std::cout << label << " n=" << n << " k=" << k << " T=" << t
+    const std::vector<float> a16_sub = gather(a16);
+    const std::vector<double> a16d_sub = gatherd(a16d);
+    const ErrorStats vs_a16 = compare(actual_sub, a16d_sub);
+    const ErrorStats a16_ref = compare(a16_sub, reference);
+    std::cout << label << " n=" << n << " k=" << k << " T=" << t << " rows=" << rn
               << " w4a4_vs_exact max_abs=" << stats.max_abs << " mean_abs=" << stats.mean_abs
               << " rel_l2=" << stats.rel_l2 << " cosine=" << stats.cosine
               << " | w4a4_vs_w4a16 rel_l2=" << vs_a16.rel_l2 << " cosine=" << vs_a16.cosine
               << " | w4a16_vs_exact rel_l2=" << a16_ref.rel_l2 << " cosine=" << a16_ref.cosine
               << "\n";
-    std::cout << "  sample w4a4[0..3]=" << actual[0] << "," << actual[1] << "," << actual[2] << ","
-              << actual[3] << " w4a16=" << a16[0] << "," << a16[1] << "," << a16[2] << ","
-              << a16[3] << " ref=" << reference[0] << "," << reference[1] << "," << reference[2]
-              << "," << reference[3] << "\n";
+    std::cout << "  sample w4a4[0..3]=" << actual_sub[0] << "," << actual_sub[1] << ","
+              << actual_sub[2] << "," << actual_sub[3] << " w4a16=" << a16_sub[0] << ","
+              << a16_sub[1] << "," << a16_sub[2] << "," << a16_sub[3] << " ref=" << reference[0]
+              << "," << reference[1] << "," << reference[2] << "," << reference[3] << "\n";
     // Random activations are the production-relevant gate (RMSNorm-like). Ramp is
     // reported but not a ship blocker for a precisely understood reason, not because
     // it is "adversarial": the period-17/period-5 ramp against period-16 patterned
@@ -194,6 +231,17 @@ int main() {
         failures += run_case("ramp-down", 4096, 12288, t, make_ramp(12288, t), 711U);
         failures += run_case("rand-down", 4096, 12288, t, make_random(12288, t, 13), 711U);
     }
+    // Schedule-ladder boundaries (M32N64/M32N128/M64N128/M128N128 transitions).
+    for (const std::int32_t t : {64, 96, 97, 128, 129, 192, 256}) {
+        failures += run_case("rand-gate_up", 24576, 4096, t, make_random(4096, t, 101U), 709U);
+        failures += run_case("rand-down", 4096, 12288, t, make_random(12288, t, 103U), 711U);
+    }
+    // Ramp at a large-T schedule (oracle-artifact story must hold beyond M32N64).
+    failures += run_case("ramp-gate_up", 24576, 4096, 128, make_ramp(4096, 128), 709U);
+    failures += run_case("ramp-down", 4096, 12288, 128, make_ramp(12288, 128), 711U);
+    // TMA path (tokens>=1024, %256==0): strided-row reference keeps CPU time sane.
+    failures += run_case("rand-gate_up", 24576, 4096, 1024, make_random(4096, 1024, 107U), 709U, 48);
+    failures += run_case("rand-down", 4096, 12288, 1024, make_random(12288, 1024, 109U), 711U, 8);
     std::cout << (failures == 0 ? "OK" : "FAIL") << " NVFP4 dynamic W4A4 numeric\n";
     return failures == 0 ? 0 : 1;
 }
