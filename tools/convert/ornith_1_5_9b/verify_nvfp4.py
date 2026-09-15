@@ -103,7 +103,13 @@ def validate_structure(artifact: Artifact) -> tuple[int, StructureSummary]:
 def verify_nvfp4_mlp(artifact: Artifact, model_dir: str | Path) -> int:
     count = 0
     with OrnithShardReader(model_dir) as reader:
-        for spec in inventory.NVFP4_TENSOR_SPECS[:2]:
+        probed = list(inventory.NVFP4_TENSOR_SPECS[:2])
+        probed += [
+            spec
+            for spec in inventory.NVFP4_TENSOR_SPECS
+            if spec.name == "text/output_head"
+        ]
+        for spec in probed:
             obj = artifact.find(spec.name)
             if not isinstance(obj, TensorObject):
                 _error(f"{spec.name} is not a tensor")
