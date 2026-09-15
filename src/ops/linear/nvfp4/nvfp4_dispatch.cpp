@@ -39,6 +39,12 @@ Nvfp4LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows
     case Nvfp4Problem::Residual6144:
     case Nvfp4Problem::Residual17408:
         return tokens >= 8 ? Nvfp4LinearRoute::W4A4 : Nvfp4LinearRoute::A16;
+    case Nvfp4Problem::Head248320:
+    case Nvfp4Problem::Draft131072:
+        // Vocab projections stay W4A16 under every policy: they feed sampling
+        // logits, verify widths stay within small-T chunking, and the dynamic
+        // gate (is_ornith_nvfp4_mlp) excludes them by construction.
+        return Nvfp4LinearRoute::A16;
     }
     throw std::logic_error("unreachable NVFP4 linear problem");
 }
