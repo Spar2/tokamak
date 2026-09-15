@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <span>
 #include <string>
@@ -221,6 +222,8 @@ int run_shape(std::int32_t n, std::int32_t k, std::uint32_t seed, bool allow_a4)
 } // namespace
 
 int main() {
+    // See test_nvfp4_a16.cpp: pin the W4A16 fallback for hermetic oracle checks.
+    ::setenv("NINFER_ORNITH_DYNAMIC_W4A4", "0", 1);
     if (ninfer::test::cuda_unavailable()) {
         std::cout << "SKIP: no usable CUDA device\n";
         return 77;

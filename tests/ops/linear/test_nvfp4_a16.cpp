@@ -1,6 +1,7 @@
 #include "ops/linear/linear_test_common.h"
 
 #include <array>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 
@@ -58,6 +59,11 @@ int run_nvfp4_a16() {
 } // namespace
 
 int main() {
+    // Hermetic A16-oracle validation: the graduated default routes Ornith MLP
+    // A16Only at T>=128 to dynamic W4A4, which is approximate and must fail a
+    // tight exact-dequant oracle. Pin the W4A16 fallback so this suite tests
+    // what its name claims regardless of ambient environment.
+    ::setenv("NINFER_ORNITH_DYNAMIC_W4A4", "0", 1);
     if (!ninfer::test::linear::cuda_available()) {
         std::cout << "SKIP: no usable CUDA device\n";
         return 77;
