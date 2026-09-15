@@ -4,8 +4,11 @@ Registered Ornith identities are `ornith-1.5-9b/groupwise-int` and `ornith-1.5-9
 target key `ornith_1_5_9b`. Runtime uses the Qwen3.5-9B-shaped family execution package: 32 layers,
 24 Gated DeltaNet layers, 8 full-attention layers, and one MTP layer. Both public artifacts keep
 the complete Text, Vision, MTP, and frontend resource inventory. The `nvfp4` identity stores MLP
-`gate_up` `[24576,4096]` and `down` `[4096,12288]` as `blockscale-k16-m128x4-v1` NVFP4 and keeps
-attention, GDN, MTP, embeddings, and vision on the groupwise-int formats.
+`gate_up` `[24576,4096]`, `down` `[4096,12288]`, and the output head `[248320,4096]` as
+`blockscale-k16-m128x4-v1` NVFP4 and keeps attention, GDN, MTP, draft head, embeddings, and
+vision on the groupwise-int formats. The `nvfp4` identity requires the native
+output head: MLP-only artifacts converted earlier fail fast at bind time with a
+tensor-contract error; regenerate with the current `convert_nvfp4`.
 
 ## Source and conversion
 
@@ -27,8 +30,12 @@ The checkpoint contains one safetensors file with NVFP4 U8 MLP/output-head weigh
 linear-attention weights. `source.py` decodes those representations on demand to logical BF16;
 the normal groupwise-int converter then emits NInfer Q4/Q5/Q6/W8 tensors. `convert_nvfp4` does not
 BF16-roundtrip MLP packed weights: it concatenates native U8 codes, swizzles E4M3 block scales,
-and writes a dummy `input_scale_divisor=1.0` required by the NVFP4 weight contract. Execution is
-W4A16 (`LinearPolicy::A16Only`); W4A4 is not enabled. The MTP tensors are already BF16 in the
+and writes a dummy `input_scale_divisor=1.0` required by the NVFP4 weight contract. The output
+head takes the same path as a single unfused source (`lm_head`); the draft head stays
+groupwise-int Q4 (measured parity-or-loss for Q4->NVFP4 at that shape). Execution is W4A16
+(`LinearPolicy::A16Only`) for vocab projections; MLP large-T uses W4A16 BF16-MMA from T>=32
+and runtime-quantized dynamic W4A4 from T>=128 by default (see the dynamic-W4A4 graduation
+note), with pure-W4A16 available via environment override. The MTP tensors are already BF16 in the
 source checkpoint and use the registered W8 MTP profile.
 
 The six frontend resources are pinned independently from Qwen3.5-9B. The Ornith chat template
