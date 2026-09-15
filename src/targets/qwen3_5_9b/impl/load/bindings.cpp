@@ -378,9 +378,15 @@ ArtifactLoadPlan bind_artifact(artifact::Binder& binder, WeightsProfile weights_
     out.final_norm = artifact::bind_device_tensor(binder, "text/final_norm",
                                                    NumericFormat::BF16, {4096});
 
-    // Output head
-    out.output_head = bind_weight(binder, "text/output_head",
-                                   NumericFormat::Q6G64_F16S, {248320, 4096});
+    // Output head: native NVFP4 words under Nvfp4Mlp (same paired-divisor
+    // convention as the MLP parents), groupwise Q6 otherwise.
+    if (weights_profile == WeightsProfile::Nvfp4Mlp) {
+        out.output_head = bind_nvfp4_weight(binder, "text/output_head", 248320, 4096,
+                                            "text/output_head_projection/input_scale_divisor");
+    } else {
+        out.output_head = bind_weight(binder, "text/output_head",
+                                       NumericFormat::Q6G64_F16S, {248320, 4096});
+    }
 
     // Draft head
     const artifact::TensorPlacement proposal_placement =
