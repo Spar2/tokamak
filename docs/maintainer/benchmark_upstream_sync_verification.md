@@ -3,7 +3,7 @@
 This report documents the performance verification of the merged `upstream/master` changes and newly instantiated `CausalD256H16Kv4` geometry (supporting 9B models: Qwen 3.5 9B and Ornith 1.5 9B) on **NVIDIA GeForce RTX 5060 Ti 16GB (sm_120a)**.
 
 ## Hardware & Runtime Configuration
-- **GPU**: NVIDIA GeForce RTX 5060 Ti 16GB (40 SMs, Blackwell sm_120a)
+- **GPU**: NVIDIA GeForce RTX 5060 Ti 16GB (36 SMs, 4608 CUDA cores, Blackwell sm_120a)
 - **Host / OS**: Linux x86_64, CUDA Toolkit 13.1
 - **Model**: `ornith-1.5-9b` (`models/ornith_1_5_9b.ninfer`, groupwise-int quantization, ~5.78 GiB VRAM footprint with MTP)
 - **Speculative Engine**: Multi-Token Prediction (MTP3, `--spec mtp --draft-tokens 3 --lm-head-draft`)
