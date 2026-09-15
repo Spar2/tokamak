@@ -33,8 +33,8 @@ Nvfp4LinearAddRoute resolve_route(std::int32_t output_rows, std::int32_t input_r
         if (policy != LinearPolicy::A16Only) {
             throw std::invalid_argument("nvfp4 linear_add: Ornith down admits only A16");
         }
-        return use_ornith_dynamic_w4a4(tokens) ? Nvfp4LinearAddRoute::W4A4
-                                               : Nvfp4LinearAddRoute::A16;
+        return use_ornith_dynamic_w4a4_for_down(tokens) ? Nvfp4LinearAddRoute::W4A4
+                                                       : Nvfp4LinearAddRoute::A16;
     }
     if (!is_27b_residual(output_rows, input_rows)) {
         throw std::invalid_argument("nvfp4 linear_add: unsupported shape");

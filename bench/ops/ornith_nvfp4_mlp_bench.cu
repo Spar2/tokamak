@@ -77,6 +77,7 @@ struct Options {
     int repeat = 30;
     std::string activations;  // optional raw BF16 [4096 x Tmax] replay file
     std::string csv_out;
+    std::string dump_outputs;  // optional dir: dump each side's [N,T] output per T
     bool profile = false;
 };
 
@@ -126,6 +127,8 @@ Options parse_options(int argc, char** argv) {
             o.activations = std::string(next("--activations"));
         } else if (a == "--csv-out") {
             o.csv_out = std::string(next("--csv-out"));
+        } else if (a == "--dump-outputs") {
+            o.dump_outputs = std::string(next("--dump-outputs"));
         } else if (a == "--profile") {
             o.profile = true;
         } else if (a == "--help" || a == "-h") {
@@ -133,7 +136,7 @@ Options parse_options(int argc, char** argv) {
                 "Usage: %s [--nvfp4-dir PATH] [--matrix gate_up|down] [--layer L] "
                 "[--t-sweep 1,2,4,8,16,32]\n"
                 "       [--warmup N] [--repeat N] [--activations RAW_BF16] [--csv-out PATH] "
-                "[--profile]\n"
+                "[--dump-outputs DIR] [--profile]\n"
                 "\n"
                 "  --nvfp4-dir   dir with model.safetensors (default: O:\\LLM\\models\\\n"
                 "                Ornith-1.5-9B-NVFP4)\n"
@@ -306,7 +309,13 @@ NativeMatrix load_native_matrix(const Options& o, const MatrixSpec& spec) {
     NativeMatrix out;
     out.packed   = std::move(packed_all);
     out.swizzled = swizzle_scales(natural_all, spec.n, groups_per_row, k_tiles);
-    out.divisor  = divisor;
+    // Kernels decode as e2m1 * e4m3 / d_w, but ModelOpt weight_scale_2 is the
+    // multiply global scale: d_w = 1 / weight_scale_2 (same inversion as the
+    // production converter; timing is value-independent, numerics are not).
+    if (!(divisor > 0.0F) || !std::isfinite(divisor)) {
+        throw std::runtime_error("native weight_scale_2 is not finite and positive");
+    }
+    out.divisor = 1.0F / divisor;
     // Word-level round-trip: swizzle is a permutation; unswizzle must recover input.
     std::uint64_t mism = 0;
     for (int b = 0; b < spec.n / 128; ++b)
@@ -421,6 +430,27 @@ int main(int argc, char** argv) {
         cudaStream_t stream = nullptr;
         CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
+        // Output capture for offline error analysis: the output buffer holds the
+        // last timed repeat's result; copy its [N,T] prefix to a raw BF16 file.
+        // Filenames carry matrix/layer/side/T; a manifest line goes to stdout.
+        auto dump_side = [&](const char* side, std::int32_t t) {
+            if (options.dump_outputs.empty()) { return; }
+            CUDA_CHECK(cudaStreamSynchronize(stream));
+            const std::size_t nbytes = static_cast<std::size_t>(kN) * t * 2;
+            std::vector<std::uint8_t> host(nbytes);
+            CUDA_CHECK(cudaMemcpy(host.data(), output.p, nbytes, cudaMemcpyDeviceToHost));
+            fs::create_directories(options.dump_outputs);
+            char path[512];
+            std::snprintf(path, sizeof(path), "%s/%s_L%d_%s_T%d.bf16le",
+                          options.dump_outputs.c_str(), spec.name, options.layer, side, t);
+            std::ofstream out(path, std::ios::binary | std::ios::trunc);
+            if (!out) { throw std::runtime_error("failed to open dump output"); }
+            out.write(reinterpret_cast<const char*>(host.data()),
+                      static_cast<std::streamsize>(nbytes));
+            out.close();
+            std::printf("dump: %s [%d x %d] BF16\n", path, kN, t);
+        };
+
         std::printf("%-6s %-14s %11s %11s %11s %10s %10s %10s\n", "T", "path", "median_us",
                     "min_us", "p95_us", "eff_GB/s", "TFLOP/s", "tok/s");
         struct Row {
@@ -446,6 +476,7 @@ int main(int argc, char** argv) {
                         spec.base_label, tm.median_us, tm.min_us, tm.p95_us,
                         bytes / sec / 1e9, flops / sec / 1e12, t / sec);
             rows.push_back({t, spec.base_label, tm, bytes / sec / 1e9, flops / sec / 1e12, t / sec});
+            dump_side(spec.base_label, t);
         }
 
         // ---- side B: native NVFP4 W4A16 ----
@@ -472,6 +503,7 @@ int main(int argc, char** argv) {
                             bytes / sec / 1e9, flops / sec / 1e12, t / sec);
                 rows.push_back(
                     {t, "NVFP4-W4A16", tm, bytes / sec / 1e9, flops / sec / 1e12, t / sec});
+                dump_side("NVFP4-W4A16", t);
             }
             nvfp4_ran = true;
         } catch (const std::exception& e) {
@@ -536,6 +568,7 @@ int main(int argc, char** argv) {
                 std::printf("%-6d %-14s %11.3f  (quant median)  mma_median=%11.3f  ws=%zu\n", t,
                             "dyn-W4A4-split", tq.median_us, tmma.median_us, w4a4_ws);
                 rows.push_back({t, "dyn-W4A4", tm, bytes / sec / 1e9, flops / sec / 1e12, t / sec});
+                dump_side("dyn-W4A4", t);
             }
             CUDA_CHECK(cudaEventDestroy(eq0));
             CUDA_CHECK(cudaEventDestroy(eq1));

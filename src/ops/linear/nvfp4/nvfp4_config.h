@@ -206,22 +206,35 @@ inline constexpr float kNvfp4DynamicPerK16Dx = 1.0F;
 inline constexpr std::int32_t kNvfp4OrnithDynamicW4a4MinT = 128;
 
 // Host-only experimental gate. NINFER_ORNITH_DYNAMIC_W4A4=1 enables the
-// runtime-quantized W4A4 route for Ornith MLP at T >= MinT. Default off so
-// A16 and W4A16 BF16-MMA remain the known-good production paths.
-inline bool ornith_dynamic_w4a4_requested() {
+// runtime-quantized W4A4 route for Ornith MLP at T >= MinT. =gate_only keeps
+// dynamic W4A4 for gate_up (linear/swiglu) while down stays W4A16 BF16-MMA:
+// down inputs are SwiGLU outputs with heavier tails than post-norm gate_up
+// inputs. Default off so A16 and W4A16 BF16-MMA remain the known-good paths.
+inline int ornith_dynamic_w4a4_mode() {
 #if defined(__CUDA_ARCH__)
-    return false;
+    return 0;
 #else
-    static const bool enabled = [] {
+    static const int mode = [] {
         const char* value = std::getenv("NINFER_ORNITH_DYNAMIC_W4A4");
-        return value != nullptr && std::strcmp(value, "1") == 0;
+        if (value == nullptr) { return 0; }
+        if (std::strcmp(value, "1") == 0) { return 2; }
+        if (std::strcmp(value, "gate_only") == 0) { return 1; }
+        return 0;
     }();
-    return enabled;
+    return mode;
 #endif
 }
 
+inline bool ornith_dynamic_w4a4_requested() { return ornith_dynamic_w4a4_mode() != 0; }
+
 inline bool use_ornith_dynamic_w4a4(std::int32_t tokens) {
     return ornith_dynamic_w4a4_requested() && tokens >= kNvfp4OrnithDynamicW4a4MinT;
+}
+
+// Down projection follows the dynamic route only in full mode; gate_only
+// keeps it on W4A16 BF16-MMA.
+inline bool use_ornith_dynamic_w4a4_for_down(std::int32_t tokens) {
+    return ornith_dynamic_w4a4_mode() == 2 && tokens >= kNvfp4OrnithDynamicW4a4MinT;
 }
 
 inline constexpr bool is_ornith_nvfp4_mlp(std::int32_t output_rows, std::int32_t input_rows) {

@@ -164,8 +164,14 @@ int run_case(std::string_view label, std::int32_t n, std::int32_t k, std::int32_
               << a16[3] << " ref=" << reference[0] << "," << reference[1] << "," << reference[2]
               << "," << reference[3] << "\n";
     // Random activations are the production-relevant gate (RMSNorm-like). Ramp is
-    // reported but not a ship blocker: periodic K-aligned structure is not a
-    // real MLP residual.
+    // reported but not a ship blocker for a precisely understood reason, not because
+    // it is "adversarial": the period-17/period-5 ramp against period-16 patterned
+    // weights cancels almost exactly (reference outputs O(0.5) vs O(40) for random),
+    // so the denominator of rel_l2/cosine vanishes while the ABSOLUTE error
+    // (mean_abs ~2.9 ramp vs ~3.4 rand) is identical quantization noise floor in
+    // both cases. Relative metrics are meaningless at zero reference energy;
+    // compare mean_abs across patterns instead. Real-activation replay (not this
+    // synthetic) is the binding quality evidence; see notes.
     const bool ramp = label.find("ramp") != std::string_view::npos;
     if (!ramp && (vs_a16.cosine < 0.98 || vs_a16.rel_l2 > 0.25)) {
         std::cerr << label << ": quality gate failed vs W4A16 MMA\n";
