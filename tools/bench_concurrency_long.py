@@ -5,6 +5,7 @@ import argparse
 import json
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -149,6 +150,16 @@ def main():
     parser.add_argument("--port", type=int, default=8092)
     parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument(
+        "--serve-bin",
+        default="./build/apps/ninfer-serve",
+        help="Server binary (default: ./build/apps/ninfer-serve)",
+    )
+    parser.add_argument(
+        "--save-server-log",
+        default=None,
+        help="Tee server stdout/stderr to PATH for per-request phase mining",
+    )
+    parser.add_argument(
         "--kv-dtype",
         choices=("bf16", "int8", "fp8", "nvfp4", "k8v4"),
         default="int8",
@@ -158,7 +169,7 @@ def main():
 
     max_c = max(args.concurrencies)
     cmd = [
-        "./build/apps/ninfer-serve",
+        args.serve_bin,
         args.model,
         "--host",
         "127.0.0.1",
@@ -192,6 +203,21 @@ def main():
     print("=" * 80)
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    log_file = None
+    if args.save_server_log:
+        log_file = open(args.save_server_log, "w", encoding="utf-8")
+
+        def _drain():
+            try:
+                for line in proc.stdout:
+                    sys.stdout.write("[serve] " + line)
+                    sys.stdout.flush()
+                    log_file.write(line)
+                    log_file.flush()
+            except ValueError:
+                pass
+
+        threading.Thread(target=_drain, daemon=True).start()
 
     try:
         print("Waiting for server to become ready...")
@@ -240,6 +266,9 @@ def main():
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+        if log_file is not None:
+            log_file.close()
+            print(f"Server log saved.")
         print("Server shutdown complete.")
 
 
