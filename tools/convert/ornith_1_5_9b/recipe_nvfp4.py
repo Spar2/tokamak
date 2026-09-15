@@ -116,6 +116,26 @@ def _build_recipes() -> tuple[
                 ),
             )
         )
+    # Full output head: single native NVFP4 source, no fusion. Appended last to
+    # match inventory order (text/output_head trails the layer specs). The draft
+    # head stays groupwise-int (measured parity-or-loss for Q4->NVFP4 at
+    # 131072x4096) and needs no native recipe.
+    head = _source("lm_head", 248320, 4096)
+    weights.append(
+        Nvfp4WeightRecipe(
+            "text/output_head",
+            (248320, 4096),
+            (_all(head),),
+            (head,),
+        )
+    )
+    inputs.append(
+        InputDivisorRecipe(
+            "text/output_head_projection/input_scale_divisor",
+            (head,),
+            ("text/output_head",),
+        )
+    )
     return tuple(weights), tuple(inputs), tuple(weight_groups)
 
 
@@ -229,7 +249,7 @@ def validate_recipe() -> None:
         len(INPUT_DIVISOR_RECIPES),
         len(WEIGHT_DIVISOR_GROUPS),
         len(NVFP4_SOURCES),
-    ) != (64, 64, 32, 96):  # 32 gate_up + 32 down; 32 fused pairs; 96 source tensors
+    ) != (65, 65, 32, 97):  # 32 gate_up + 32 down + 1 head; 32 fused pairs; 96 + 1 sources
         raise ValueError("Ornith NVFP4 source recipe is incomplete")
     if tuple(NVFP4_WEIGHTS_BY_NAME) != tuple(spec.name for spec in inventory.NVFP4_TENSOR_SPECS):
         raise ValueError("NVFP4 weight recipe order does not match inventory")
@@ -245,8 +265,8 @@ def validate_recipe() -> None:
             raise ValueError(f"{selected.object_name}: incompatible source K")
     bound_weights = tuple(name for site in INPUT_DIVISOR_RECIPES for name in site.weight_names)
     if (
-        len(bound_weights) != 64
-        or len(set(bound_weights)) != 64
+        len(bound_weights) != 65
+        or len(set(bound_weights)) != 65
         or set(bound_weights) != set(NVFP4_WEIGHTS_BY_NAME)
     ):
         raise ValueError("input-divisor sites do not cover NVFP4 parents exactly once")
