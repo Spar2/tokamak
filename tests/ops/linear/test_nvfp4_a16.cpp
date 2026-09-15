@@ -25,6 +25,16 @@ int run_nvfp4_a16() {
         Invocation{4, CallForm::Policy, ops::LinearPolicy::A16Only},
         Invocation{16, CallForm::Policy, ops::LinearPolicy::A16Only},
     };
+    // Vocab projections: decode + small-T production widths. T>32 is served by
+    // 32-chunked small-T calls through the same launchers.
+    constexpr std::array head_invocations{
+        Invocation{1, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{2, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{4, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{8, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{16, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{32, CallForm::Policy, ops::LinearPolicy::A16Only},
+    };
     int failures = 0;
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
                           {14336, 5120, 701U, Comparison::Sampled, true, attn_invocations});
@@ -40,6 +50,10 @@ int run_nvfp4_a16() {
                           {24576, 4096, 709U, Comparison::Sampled, true, new_problem_invocations});
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
                           {4096, 12288, 711U, Comparison::Sampled, true, new_problem_invocations});
+    failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
+                          {248320, 4096, 713U, Comparison::Sampled, true, head_invocations});
+    failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
+                          {131072, 4096, 715U, Comparison::Sampled, true, head_invocations});
     return failures;
 }
 
