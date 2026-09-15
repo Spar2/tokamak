@@ -236,6 +236,10 @@ int main() {
         failures += run_case("rand-gate_up", 24576, 4096, t, make_random(4096, t, 101U), 709U);
         failures += run_case("rand-down", 4096, 12288, t, make_random(12288, t, 103U), 711U);
     }
+    // M128N128 Pipelined-vs-Resident boundary (T<=512 pipelined, above resident).
+    failures += run_case("rand-gate_up", 24576, 4096, 512, make_random(4096, 512, 105U), 709U);
+    failures += run_case("rand-down", 4096, 12288, 512, make_random(12288, 512, 106U), 711U);
+    failures += run_case("rand-gate_up", 24576, 4096, 513, make_random(4096, 513, 108U), 709U, 48);
     // Ramp at a large-T schedule (oracle-artifact story must hold beyond M32N64).
     failures += run_case("ramp-gate_up", 24576, 4096, 128, make_ramp(4096, 128), 709U);
     failures += run_case("ramp-down", 4096, 12288, 128, make_ramp(12288, 128), 711U);
