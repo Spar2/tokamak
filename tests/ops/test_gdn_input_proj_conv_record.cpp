@@ -422,6 +422,48 @@ int run_fp8() {
     return failures;
 }
 
+// Ornith-1.5-9B fused parent (12288x4096 -> qkv 8192, z 4096): production
+// hybrid regime is T>=8 (C8 decode, MTP-verify batches, prefill snapshots),
+// always via the composed-materialized record path.
+int run_fp8_4096_case(DevicePackedWeight& parent, std::int32_t width, std::int32_t batch,
+                      std::vector<std::int32_t> valid, std::uint32_t seed) {
+    constexpr std::int32_t kHidden = 4096;
+    constexpr std::int32_t kRows   = 12288;
+    constexpr ops::LinearPolicy kPolicy = ops::LinearPolicy::A16Only;
+    const std::size_t snapshot_bytes = ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, kPolicy, batch, width, width);
+    const std::size_t record_bytes = ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, kPolicy, batch, width, width);
+    return run_case("FP8-4096 A16 B=" + std::to_string(batch) + " W=" + std::to_string(width),
+        kHidden, 4096, 4096, width, batch, std::move(valid), snapshot_bytes, record_bytes,
+        [&](const Tensor& x, const Tensor& conv, Tensor& state, const Tensor& valid_columns,
+            const Tensor& initial, const Tensor& snapshot_base, Tensor& q, Tensor& k, Tensor& v,
+            Tensor& z, WorkspaceArena& workspace, cudaStream_t stream) {
+            ops::gdn_input_proj_conv_snapshot(x, parent.view(), conv, state, valid_columns,
+                initial, snapshot_base, q, k, v, z, kPolicy, workspace, stream);
+        },
+        [&](const Tensor& x, const Tensor& conv, const Tensor& state,
+            const Tensor& valid_columns, const Tensor& initial, Tensor& record, Tensor& q,
+            Tensor& k, Tensor& v, Tensor& z, WorkspaceArena& workspace, cudaStream_t stream) {
+            ops::gdn_input_proj_conv_record(x, parent.view(), conv, state, valid_columns,
+                initial, record, q, k, v, z, kPolicy, workspace, stream);
+        }, seed);
+}
+
+int run_fp8_4096() {
+    constexpr std::int32_t kHidden = 4096;
+    constexpr std::int32_t kRows   = 12288;
+    DevicePackedWeight parent(quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16S,
+                                                                      kRows, kHidden, 1703U));
+    int failures = 0;
+    failures += run_fp8_4096_case(parent, 2, 8, ragged(2, 8), 1711U);
+    failures += run_fp8_4096_case(parent, 8, 2, ragged(8, 2), 1713U);
+    failures += run_fp8_4096_case(parent, 8, 1, {}, 1715U);
+    failures += run_fp8_4096_case(parent, 4, 1, {}, 1717U);
+    failures += parent.verify_preserved("FP8-4096 record parent weight");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -435,6 +477,7 @@ int main() {
     failures += run_w8();
     failures += run_nvfp4();
     failures += run_fp8();
+    failures += run_fp8_4096();
     std::cout << (failures == 0 ? "OK" : "FAIL") << " gdn_input_proj_conv_record\n";
     return failures == 0 ? 0 : 1;
 }

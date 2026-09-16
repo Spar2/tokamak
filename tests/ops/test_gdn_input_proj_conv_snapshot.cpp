@@ -985,6 +985,61 @@ int run_fp8() {
     return failures;
 }
 
+// Ornith-1.5-9B fused parent (12288x4096 -> qkv 8192, z 4096): production
+// hybrid regime is T>=8 (C8 decode, MTP-verify batches, prefill snapshots),
+// always via the composed-materialized snapshot path.
+int run_fp8_4096() {
+    constexpr std::int32_t kHidden    = 4096;
+    constexpr std::int32_t kValueRows = 4096;
+    constexpr std::int32_t kZRows     = 4096;
+    constexpr std::int32_t kChannels  = 8192;
+    constexpr std::int32_t kRows      = kChannels + kZRows;
+    constexpr ops::LinearPolicy kPolicy = ops::LinearPolicy::A16Only;
+    DevicePackedWeight parent(
+        quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, 947U));
+
+    const auto run_batched = [&](std::int32_t width, std::int32_t batch,
+                                 std::vector<std::int32_t> valid_columns, std::uint32_t seed) {
+        const std::vector<float> conv_weight = make_conv_weight(kChannels, seed);
+        const std::size_t workspace_bytes =
+            ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
+                QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, kPolicy, batch, width, width);
+        if (workspace_bytes == 0) {
+            std::cerr << "FP8-4096 snapshot capacity is zero for B=" << batch << " W=" << width
+                      << '\n';
+            return 1;
+        }
+        return run_batched_case(
+            "FP8-4096 A16 B=" + std::to_string(batch) + " W=" + std::to_string(width), kHidden,
+            kValueRows, kZRows, width, batch, std::move(valid_columns), conv_weight,
+            workspace_bytes, kFp8GdnInputProjConvSnapshotA16Tolerance,
+            [&](std::int32_t row, std::int32_t flat_column, const std::vector<float>& activation) {
+                return quantized_weight::dot_fp64(
+                    parent.host, row,
+                    activation.data() + static_cast<std::size_t>(flat_column) * kHidden, kHidden);
+            },
+            [&](std::int32_t row, std::int32_t flat_column, const std::vector<float>& activation) {
+                return quantized_weight::dot_fp64(
+                    parent.host, kChannels + row,
+                    activation.data() + static_cast<std::size_t>(flat_column) * kHidden, kHidden);
+            },
+            [&](const Tensor& x, const Tensor& conv, Tensor& state, const Tensor& valid,
+                const Tensor& initial, const Tensor& snapshot_base, Tensor& q, Tensor& k, Tensor& v,
+                Tensor& z, WorkspaceArena& workspace) {
+                ops::gdn_input_proj_conv_snapshot(x, parent.view(), conv, state, valid, initial,
+                                                  snapshot_base, q, k, v, z, kPolicy, workspace,
+                                                  nullptr);
+            });
+    };
+    int failures = 0;
+    failures += run_batched(1, 8, {1, 1, 1, 1, 1, 1, 1, 1}, 953U);
+    failures += run_batched(8, 2, {8, 5}, 953U);
+    failures += run_batched(8, 1, {}, 953U);
+    failures += run_batched(4, 1, {}, 953U);
+    failures += parent.verify_preserved("batched FP8-4096 parent weight");
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -1048,6 +1103,7 @@ int main() {
     failures += run_w8();
     failures += run_nvfp4();
     failures += run_fp8();
+    failures += run_fp8_4096();
     std::cout << (failures == 0 ? "OK" : "FAIL") << " gdn_input_proj_conv_snapshot\n";
     return failures == 0 ? 0 : 1;
 }
