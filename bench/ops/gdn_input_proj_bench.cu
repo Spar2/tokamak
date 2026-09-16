@@ -39,6 +39,9 @@ struct Options {
     Format format                  = Format::All;
     ops::LinearPolicy nvfp4_policy = ops::LinearPolicy::AllowA4;
     ops::LinearPolicy fp8_policy   = ops::LinearPolicy::AllowA8;
+    // 5120 = 27B GDN parent shapes (default, preserves published invocation);
+    // 4096 = Ornith-1.5-9B shapes. Only q4q5/fp8 implement 4096.
+    std::int32_t shape             = 5120;
     CacheMode cache                = CacheMode::Cold;
     std::vector<std::int32_t> tokens{1, 2, 4, 8, 12, 16, 32, 64, 128, 256, 512, 1024};
     int warmup   = 5;
@@ -63,7 +66,7 @@ struct Result {
                  "error: %s\n"
                  "usage: ninfer_gdn_input_proj_bench "
                  "[--format q4q5|w8|nvfp4|fp8|all] [--nvfp4-policy a16|a4] "
-                 "[--fp8-policy a16|a8] "
+                 "[--fp8-policy a16|a8] [--shape 5120|4096] "
                  "[--tokens T,...] [--cache cold|warm|both] [--warmup N] [--repeat N] "
                  "[--profile] [--csv-out PATH]\n",
                  message);
@@ -138,6 +141,14 @@ Options parse_options(int argc, char** argv) {
                 usage("--fp8-policy expects a16 or a8");
         } else if (argument == "--tokens") {
             options.tokens = parse_list(next("--tokens requires a value"), "--tokens");
+        } else if (argument == "--shape") {
+            const std::string_view value(next("--shape requires a value"));
+            if (value == "5120")
+                options.shape = 5120;
+            else if (value == "4096")
+                options.shape = 4096;
+            else
+                usage("--shape expects 5120 or 4096");
         } else if (argument == "--cache") {
             const std::string_view value(next("--cache requires a value"));
             if (value == "cold")
@@ -294,6 +305,37 @@ void run_q4q5(const Options& options, DeviceBuffer& flush, cudaStream_t stream,
         [](std::int32_t) { return std::size_t{0}; }, make_launch, flush, stream, results);
 }
 
+// Ornith-1.5-9B two-parent production route (qk Q4 4096x4096 +
+// value_z Q5 8192x4096 -> qkv 8192, z 4096).
+void run_q4q5_4096(const Options& options, DeviceBuffer& flush, cudaStream_t stream,
+                   std::vector<Result>& results) {
+    constexpr std::int32_t kHidden     = 4096;
+    constexpr std::int32_t kQkRows     = 4096;
+    constexpr std::int32_t kValueRows  = 4096;
+    constexpr std::int32_t kZRows      = 4096;
+    constexpr std::int32_t kOutputRows = kQkRows + kValueRows + kZRows;
+    const std::int32_t max_tokens = *std::max_element(options.tokens.begin(), options.tokens.end());
+    bench::PackedQuantizedWeight qk = bench::make_row_split_weight(
+        QType::Q4G64_F16S, kQkRows, kHidden, kHidden, {0x31, 0x00, 0x3c00});
+    bench::PackedQuantizedWeight value_z = bench::make_row_split_weight(
+        QType::Q5G64_F16S, kValueRows + kZRows, kHidden, kHidden, {0x31, 0xa5, 0x3c00});
+    DeviceBuffer input = bench::make_bf16(static_cast<std::size_t>(kHidden) * max_tokens);
+    DeviceBuffer qkv(static_cast<std::size_t>(kQkRows + kValueRows) * max_tokens * 2);
+    DeviceBuffer z(static_cast<std::size_t>(kZRows) * max_tokens * 2);
+    const auto make_launch = [&](std::int32_t tokens) {
+        return [&, tokens](cudaStream_t launch_stream) {
+            Tensor x(input.p, DType::BF16, {kHidden, tokens});
+            Tensor tqkv(qkv.p, DType::BF16, {kQkRows + kValueRows, tokens});
+            Tensor tz(z.p, DType::BF16, {kZRows, tokens});
+            ops::gdn_input_proj(x, qk.weight, value_z.weight, tqkv, tz, launch_stream);
+        };
+    };
+    measure_points(
+        options, "q4q5_4096", "a16", kHidden, kOutputRows,
+        qk.model_weight_bytes() + value_z.model_weight_bytes(),
+        [](std::int32_t) { return std::size_t{0}; }, make_launch, flush, stream, results);
+}
+
 void run_w8(const Options& options, DeviceBuffer& flush, cudaStream_t stream,
             std::vector<Result>& results) {
     constexpr std::int32_t kHidden     = 2048;
@@ -386,6 +428,39 @@ void run_fp8(const Options& options, DeviceBuffer& flush, cudaStream_t stream,
                    results);
 }
 
+// Ornith-1.5-9B fused FP8 parent (12288x4096 -> qkv 8192, z 4096).
+void run_fp8_4096(const Options& options, DeviceBuffer& flush, cudaStream_t stream,
+                  std::vector<Result>& results) {
+    constexpr std::int32_t kHidden     = 4096;
+    constexpr std::int32_t kQkvRows    = 8192;
+    constexpr std::int32_t kZRows      = 4096;
+    constexpr std::int32_t kOutputRows = kQkvRows + kZRows;
+    const std::int32_t max_tokens = *std::max_element(options.tokens.begin(), options.tokens.end());
+    bench::PackedQuantizedWeight parent = bench::make_fp8_weight(kOutputRows, kHidden);
+    const std::size_t maximum_workspace = ops::gdn_input_proj_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, kOutputRows, kHidden, options.fp8_policy, 1, max_tokens);
+    WorkspaceArena workspace(std::max<std::size_t>(maximum_workspace, 256));
+    DeviceBuffer input = bench::make_bf16(static_cast<std::size_t>(kHidden) * max_tokens);
+    DeviceBuffer qkv(static_cast<std::size_t>(kQkvRows) * max_tokens * 2);
+    DeviceBuffer z(static_cast<std::size_t>(kZRows) * max_tokens * 2);
+    const auto make_launch = [&](std::int32_t tokens) {
+        return [&, tokens](cudaStream_t launch_stream) {
+            Tensor x(input.p, DType::BF16, {kHidden, tokens});
+            Tensor tqkv(qkv.p, DType::BF16, {kQkvRows, tokens});
+            Tensor tz(z.p, DType::BF16, {kZRows, tokens});
+            ops::gdn_input_proj(x, parent.weight, tqkv, tz, options.fp8_policy, workspace,
+                                launch_stream);
+        };
+    };
+    const auto workspace_capacity = [&](std::int32_t tokens) {
+        return ops::gdn_input_proj_workspace_capacity_bytes(
+            QType::FP8_E4M3FN_ROW_BF16S, kOutputRows, kHidden, options.fp8_policy, tokens, tokens);
+    };
+    measure_points(options, "fp8_4096", policy_name(options.fp8_policy), kHidden, kOutputRows,
+                   parent.model_weight_bytes(), workspace_capacity, make_launch, flush, stream,
+                   results);
+}
+
 void write_csv(const Options& options, const std::vector<Result>& results) {
     if (options.csv_out.empty()) { return; }
     const std::filesystem::path path(options.csv_out);
@@ -422,10 +497,22 @@ int main(int argc, char** argv) {
         DeviceBuffer flush(kFlushBytes);
         std::vector<Result> results;
 
-        if (selected(options.format, Format::Q4Q5)) { run_q4q5(options, flush, stream, results); }
+        if (selected(options.format, Format::Q4Q5)) {
+            if (options.shape == 4096) {
+                run_q4q5_4096(options, flush, stream, results);
+            } else {
+                run_q4q5(options, flush, stream, results);
+            }
+        }
         if (selected(options.format, Format::W8)) { run_w8(options, flush, stream, results); }
         if (selected(options.format, Format::Nvfp4)) { run_nvfp4(options, flush, stream, results); }
-        if (selected(options.format, Format::Fp8)) { run_fp8(options, flush, stream, results); }
+        if (selected(options.format, Format::Fp8)) {
+            if (options.shape == 4096) {
+                run_fp8_4096(options, flush, stream, results);
+            } else {
+                run_fp8(options, flush, stream, results);
+            }
+        }
 
         write_csv(options, results);
         CUDA_CHECK(cudaStreamDestroy(stream));

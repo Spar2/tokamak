@@ -8,12 +8,14 @@
 
 namespace ninfer::ops::detail {
 
-struct Fp8GdnInputOutput {
-    static constexpr std::int32_t kQueryRows = 2048;
-    static constexpr std::int32_t kKeyRows   = 2048;
-    static constexpr std::int32_t kValueRows = 6144;
+template <std::int32_t QueryRows, std::int32_t KeyRows, std::int32_t ValueRows,
+          std::int32_t ZRows>
+struct Fp8GdnInputSplitOutput {
+    static constexpr std::int32_t kQueryRows = QueryRows;
+    static constexpr std::int32_t kKeyRows   = KeyRows;
+    static constexpr std::int32_t kValueRows = ValueRows;
     static constexpr std::int32_t kQkvRows   = kQueryRows + kKeyRows + kValueRows;
-    static constexpr std::int32_t kZRows     = 6144;
+    static constexpr std::int32_t kZRows     = ZRows;
     static constexpr std::int32_t kRows      = kQkvRows + kZRows;
 
     __nv_bfloat16* qkv;
@@ -38,8 +40,14 @@ struct Fp8GdnInputOutput {
     }
 };
 
-static_assert(Fp8GdnInputOutput::kRows == 16384);
-static_assert((Fp8GdnInputOutput::kQkvRows % 128) == 0);
-static_assert((Fp8GdnInputOutput::kZRows % 128) == 0);
+static_assert(Fp8GdnInputSplitOutput<2048, 2048, 6144, 6144>::kRows == 16384);
+static_assert((Fp8GdnInputSplitOutput<2048, 2048, 6144, 6144>::kQkvRows % 128) == 0);
+static_assert((Fp8GdnInputSplitOutput<2048, 2048, 6144, 6144>::kZRows % 128) == 0);
+
+// 5120-wide (27B) parent split; unchanged production behavior.
+using Fp8GdnInputOutput = Fp8GdnInputSplitOutput<2048, 2048, 6144, 6144>;
+// Ornith-1.5-9B parent split (qkv 8192 = q2048+k2048+v4096, z 4096).
+using Fp8GdnInput4096Output = Fp8GdnInputSplitOutput<2048, 2048, 4096, 4096>;
+static_assert(Fp8GdnInput4096Output::kRows == 12288);
 
 } // namespace ninfer::ops::detail

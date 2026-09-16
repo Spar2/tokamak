@@ -121,6 +121,8 @@ struct Fp8A16SmallTMmaSchedule {
 
 using Fp8AttnInputGeometry       = Fp8Geometry<14336, 5120>;
 using Fp8GdnInputGeometry        = Fp8Geometry<16384, 5120>;
+// Ornith-1.5-9B fused GDN input parent (qk 4096 + v 4096 + z 4096).
+using Fp8GdnInput4096Geometry = Fp8Geometry<12288, 4096>;
 using Fp8MlpGateUpGeometry       = Fp8Geometry<34816, 5120>;
 using Fp8VocabularyGeometry      = Fp8Geometry<248320, 5120>;
 using Fp8Residual6144Geometry    = Fp8Geometry<5120, 6144>;
@@ -128,6 +130,8 @@ using Fp8Residual17408Geometry   = Fp8Geometry<5120, 17408>;
 using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
 using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
 using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
+// Ornith-1.5-9B activation width.
+using Fp8Activation4096Geometry = Fp8ActivationGeometry<4096>;
 
 inline constexpr std::int32_t kFp8VocabularyFirstA16SmallTMmaT = 1;
 inline constexpr std::int32_t kFp8VocabularyLastA16SmallTMmaT  = 48;
@@ -216,6 +220,12 @@ struct Fp8LinearDecodeProductionSchedule<Fp8GdnInputGeometry> {
     using Type = Fp8GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
 };
 
+// Initial decode schedule mirrors the 5120-wide GDN parent.
+template <>
+struct Fp8LinearDecodeProductionSchedule<Fp8GdnInput4096Geometry> {
+    using Type = Fp8GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
+};
+
 template <>
 struct Fp8LinearDecodeProductionSchedule<Fp8MlpGateUpGeometry> {
     using Type = Fp8GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
@@ -242,6 +252,10 @@ inline constexpr std::int32_t kFp8LinearSmallTMax<Fp8AttnInputGeometry> = 11;
 
 template <>
 inline constexpr std::int32_t kFp8LinearSmallTMax<Fp8GdnInputGeometry> = 10;
+
+// Initial small-T range mirrors the 5120-wide GDN parent.
+template <>
+inline constexpr std::int32_t kFp8LinearSmallTMax<Fp8GdnInput4096Geometry> = 10;
 
 template <>
 inline constexpr std::int32_t kFp8LinearSmallTMax<Fp8MlpGateUpGeometry> = 4;
@@ -299,6 +313,20 @@ template <int ActiveTokens>
 struct Fp8LinearSmallTProductionSchedule<Fp8GdnInputGeometry, ActiveTokens> {
     static_assert(ActiveTokens >= kFp8FirstSmallT);
     static_assert(ActiveTokens <= kFp8LinearSmallTMax<Fp8GdnInputGeometry>);
+    static constexpr int kValuesPerLane     = ActiveTokens >= 5 && ActiveTokens <= 6 ? 8 : 16;
+    static constexpr auto kActivationAccess = ActiveTokens <= 4
+                                                  ? Fp8SmallTActivationAccess::SharedPhase
+                                                  : Fp8SmallTActivationAccess::TokenPacked;
+    using Type =
+        Fp8SmallTSchedule<8, 2, kValuesPerLane, ActiveTokens, 1, kActivationAccess,
+                          Fp8CodeCache::Default, 1, Fp8SmallTBlockOrder::RowsContiguous, 1>;
+};
+
+// Initial small-T schedule mirrors the 5120-wide GDN parent.
+template <int ActiveTokens>
+struct Fp8LinearSmallTProductionSchedule<Fp8GdnInput4096Geometry, ActiveTokens> {
+    static_assert(ActiveTokens >= kFp8FirstSmallT);
+    static_assert(ActiveTokens <= kFp8LinearSmallTMax<Fp8GdnInput4096Geometry>);
     static constexpr int kValuesPerLane     = ActiveTokens >= 5 && ActiveTokens <= 6 ? 8 : 16;
     static constexpr auto kActivationAccess = ActiveTokens <= 4
                                                   ? Fp8SmallTActivationAccess::SharedPhase

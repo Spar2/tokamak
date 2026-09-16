@@ -318,14 +318,26 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& qkv, 
         constexpr std::int32_t kQkvRows = 10240;
         constexpr std::int32_t kZRows   = 6144;
         constexpr std::int32_t kRows    = kQkvRows + kZRows;
+        // Ornith-1.5-9B fused parent (qk 4096 + v 4096 + z 4096).
+        constexpr std::int32_t kHidden4096  = 4096;
+        constexpr std::int32_t kQkvRows4096 = 8192;
+        constexpr std::int32_t kZRows4096   = 4096;
         if (policy != LinearPolicy::A16Only && policy != LinearPolicy::AllowA8) {
             throw std::invalid_argument("FP8 gdn_input_proj admits only A16 or A8");
+        }
+        detail::validate_fp8_weight(weight, "fp8 gdn_input_proj");
+        if (weight.n == kQkvRows4096 + kZRows4096 && weight.k == kHidden4096) {
+            require_matrix(x, kHidden4096, cols, "x");
+            require_matrix(qkv, kQkvRows4096, cols, "qkv");
+            require_matrix(z, kZRows4096, cols, "z");
+            require_single_parent_nonoverlap(x, qkv, z);
+            detail::fp8_gdn_input_dispatch(x, weight, qkv, z, policy, workspace, stream);
+            return;
         }
         require_matrix(x, kHidden, cols, "x");
         require_matrix(qkv, kQkvRows, cols, "qkv");
         require_matrix(z, kZRows, cols, "z");
         require_single_parent_nonoverlap(x, qkv, z);
-        detail::validate_fp8_weight(weight, "fp8 gdn_input_proj");
         if (weight.n != kRows || weight.k != kHidden) {
             throw std::invalid_argument("fp8 gdn_input_proj: unsupported weight shape");
         }
@@ -780,9 +792,17 @@ std::size_t gdn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::int
         return detail::nvfp4_gdn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
     }
     if (parent_qtype == QType::FP8_E4M3FN_ROW_BF16S) {
+        if ((policy != LinearPolicy::A16Only && policy != LinearPolicy::AllowA8)) {
+            throw std::invalid_argument("gdn_input_proj workspace: unsupported FP8 profile");
+        }
+        // Ornith-1.5-9B fused parent.
+        if (parent_rows == detail::Fp8GdnInput4096Geometry::kOutputRows &&
+            input_rows == detail::Fp8GdnInput4096Geometry::kInputRows) {
+            return detail::fp8_gdn_input_4096_workspace_capacity_bytes(policy, min_tokens,
+                                                                       max_tokens);
+        }
         if (parent_rows != detail::Fp8GdnInputGeometry::kOutputRows ||
-            input_rows != detail::Fp8GdnInputGeometry::kInputRows ||
-            (policy != LinearPolicy::A16Only && policy != LinearPolicy::AllowA8)) {
+            input_rows != detail::Fp8GdnInputGeometry::kInputRows) {
             throw std::invalid_argument("gdn_input_proj workspace: unsupported FP8 profile");
         }
         return detail::fp8_gdn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
