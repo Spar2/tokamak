@@ -19,7 +19,13 @@ from typing import Mapping, Sequence
 import torch
 
 from tools.artifact.container import ArtifactIdentity, ArtifactObject, ArtifactWriter
-from tools.artifact.layouts import decode_nvfp4_words, encode_direct, encode_nvfp4
+from tools.artifact.layouts import (
+    decode_fp8_row_scaled_words,
+    decode_nvfp4_words,
+    encode_direct,
+    encode_fp8_row_scaled,
+    encode_nvfp4,
+)
 from tools.convert.common.quantize import pick_device
 from tools.convert.qwen3_6.common import conversion as family_conversion
 
@@ -27,6 +33,7 @@ from . import convert as base_convert
 from . import draft_head
 from . import inventory_nvfp4 as inventory
 from . import recipe as groupwise_recipe
+from . import recipe_fp8gdn
 from . import recipe_nvfp4 as recipe
 from .source import OrnithShardReader
 
@@ -55,6 +62,7 @@ def _repo_root() -> Path:
 def preflight_inventory() -> None:
     inventory.validate_inventory()
     recipe.validate_recipe()
+    recipe_fp8gdn.validate_recipe()
 
 
 def build_object_plan(resources: Mapping[str, bytes]) -> ObjectPlan:
@@ -87,6 +95,16 @@ def _encode_nvfp4_weight(spec: inventory.TensorSpec, reader: OrnithShardReader) 
         or bytes(decoded_divisor.reshape(1).view(torch.uint8).numpy()) != divisor
     ):
         raise RuntimeError(f"{spec.name}: NVFP4 layout word verification failed")
+    return payload
+
+
+def _encode_fp8_gdn_weight(spec: inventory.TensorSpec, reader: OrnithShardReader) -> bytes:
+    selected = recipe_fp8gdn.FP8_GDN_WEIGHTS_BY_NAME[spec.name]
+    codes, scales = recipe_fp8gdn.materialize_fp8_gdn_weight(selected, reader)
+    payload = encode_fp8_row_scaled(codes, scales, spec.shape)
+    decoded_codes, decoded_scales = decode_fp8_row_scaled_words(payload, spec.shape)
+    if not torch.equal(decoded_codes, codes) or not torch.equal(decoded_scales, scales):
+        raise RuntimeError(f"{spec.name}: FP8 layout word verification failed")
     return payload
 
 
@@ -154,6 +172,8 @@ def convert(
                     payload = resources[spec.name]
                 elif spec.format == inventory.NVFP4:
                     payload = _encode_nvfp4_weight(spec, reader)
+                elif spec.format == inventory.FP8:
+                    payload = _encode_fp8_gdn_weight(spec, reader)
                 elif spec.name in recipe.INPUT_DIVISORS_BY_NAME:
                     payload = encode_direct(
                         recipe.materialize_input_divisor(recipe.INPUT_DIVISORS_BY_NAME[spec.name]),
