@@ -58,6 +58,16 @@ ops::LinearPolicy text_policy(const Weight&) {
 
 constexpr std::size_t kMinimumLeafWorkspaceBytes = 1;
 
+// Hybrid GDN threshold: token widths at or above this use the native FP8
+// fused parent; narrower widths stay on the groupwise split parents. The
+// threshold is a static property of each captured graph (width x batch),
+// so CUDA-graph capture bakes in the selected route.
+constexpr std::int32_t kGdnHybridFp8MinTokens = 8;
+
+bool use_hybrid_fp8_parent(std::int32_t tokens) {
+    return tokens >= kGdnHybridFp8MinTokens;
+}
+
 std::size_t gdn_snapshot_workspace_bytes(const Tensor& hidden,
                                          const Variant::GdnProjectionWeights& weights) {
     const std::int32_t batch = hidden.ne[2];
@@ -67,6 +77,15 @@ std::size_t gdn_snapshot_workspace_bytes(const Tensor& hidden,
                         ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
                             TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch,
                             width, width));
+    }
+    if (const auto* hybrid =
+            std::get_if<HybridGdnInputProjectionPayload>(&weights.input_projection)) {
+        const std::size_t split = ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
+            TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch, width, width);
+        const Weight& parent = hybrid->query_key_value_z;
+        const std::size_t fused = ops::gdn_input_proj_conv_snapshot_workspace_capacity_bytes(
+            parent.qtype, parent.n, parent.k, text_policy(parent), batch, width, width);
+        return std::max({kMinimumLeafWorkspaceBytes, split, fused});
     }
     const Weight& parent =
         std::get<FusedGdnInputProjectionPayload>(weights.input_projection).query_key_value_z;
@@ -85,6 +104,15 @@ std::size_t gdn_record_workspace_bytes(const Tensor& hidden,
                         ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
                             TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch,
                             width, width));
+    }
+    if (const auto* hybrid =
+            std::get_if<HybridGdnInputProjectionPayload>(&weights.input_projection)) {
+        const std::size_t split = ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
+            TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, batch, width, width);
+        const Weight& parent = hybrid->query_key_value_z;
+        const std::size_t fused = ops::gdn_input_proj_conv_record_workspace_capacity_bytes(
+            parent.qtype, parent.n, parent.k, text_policy(parent), batch, width, width);
+        return std::max({kMinimumLeafWorkspaceBytes, split, fused});
     }
     const Weight& parent =
         std::get<FusedGdnInputProjectionPayload>(weights.input_projection).query_key_value_z;
@@ -190,6 +218,17 @@ void Variant::gdn_input_projection(const Tensor& hidden, const GdnProjectionWeig
                             stream);
         return;
     }
+    if (const auto* hybrid =
+            std::get_if<HybridGdnInputProjectionPayload>(&weights.input_projection)) {
+        if (use_hybrid_fp8_parent(hidden.ne[1])) {
+            ops::gdn_input_proj(hidden, hybrid->query_key_value_z, qkv, output_gate_flat,
+                                text_policy(hybrid->query_key_value_z), workspace, stream);
+            return;
+        }
+        ops::gdn_input_proj(hidden, hybrid->split.query_key, hybrid->split.value_z, qkv,
+                            output_gate_flat, stream);
+        return;
+    }
     const Weight& fused =
         std::get<FusedGdnInputProjectionPayload>(weights.input_projection).query_key_value_z;
     ops::gdn_input_proj(hidden, fused, qkv, output_gate_flat, text_policy(fused), workspace,
@@ -209,6 +248,21 @@ void Variant::gdn_input_projection_snapshot(
             std::get_if<SplitGdnInputProjectionPayload>(&weights.input_projection)) {
         ops::gdn_input_proj_conv_snapshot(hidden, split->query_key, split->value_z, conv_weight,
                                           conv_states, valid_columns, initial_slot,
+                                          snapshot_base_slot, query, key, value, output_gate_view,
+                                          leaf_workspace, stream);
+        return;
+    }
+    if (const auto* hybrid =
+            std::get_if<HybridGdnInputProjectionPayload>(&weights.input_projection)) {
+        if (use_hybrid_fp8_parent(hidden.ne[1] * hidden.ne[2])) {
+            ops::gdn_input_proj_conv_snapshot(
+                hidden, hybrid->query_key_value_z, conv_weight, conv_states, valid_columns,
+                initial_slot, snapshot_base_slot, query, key, value, output_gate_view,
+                text_policy(hybrid->query_key_value_z), leaf_workspace, stream);
+            return;
+        }
+        ops::gdn_input_proj_conv_snapshot(hidden, hybrid->split.query_key, hybrid->split.value_z,
+                                          conv_weight, conv_states, valid_columns, initial_slot,
                                           snapshot_base_slot, query, key, value, output_gate_view,
                                           leaf_workspace, stream);
         return;
@@ -236,6 +290,22 @@ void Variant::gdn_input_projection_record(const Tensor& hidden, const GdnProject
                                         conv_states, valid_columns, initial_slots, conv_record,
                                         query, key, value, output_gate_view, leaf_workspace,
                                         stream);
+        return;
+    }
+    if (const auto* hybrid =
+            std::get_if<HybridGdnInputProjectionPayload>(&weights.input_projection)) {
+        if (use_hybrid_fp8_parent(hidden.ne[1] * hidden.ne[2])) {
+            ops::gdn_input_proj_conv_record(hidden, hybrid->query_key_value_z, conv_weight,
+                                            conv_states, valid_columns, initial_slots, conv_record,
+                                            query, key, value, output_gate_view,
+                                            text_policy(hybrid->query_key_value_z),
+                                            leaf_workspace, stream);
+            return;
+        }
+        ops::gdn_input_proj_conv_record(hidden, hybrid->split.query_key, hybrid->split.value_z,
+                                        conv_weight, conv_states, valid_columns, initial_slots,
+                                        conv_record, query, key, value, output_gate_view,
+                                        leaf_workspace, stream);
         return;
     }
     const Weight& fused =

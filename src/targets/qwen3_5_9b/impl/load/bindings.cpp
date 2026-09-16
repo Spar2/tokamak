@@ -159,10 +159,16 @@ load_attention_projection(const FullAttentionPlan& plan,
 
 GdnInputProjectionPayload
 load_gdn_input_projection(const GdnPlan& plan, const artifact::MaterializedArtifact& materialized) {
-    const auto* split = std::get_if<SplitGdnInputProjectionPlan>(&plan.input_projection);
-    return SplitGdnInputProjectionPayload{
-        .query_key = materialized_weight(materialized, split->query_key, 4096, 4096),
-        .value_z   = materialized_weight(materialized, split->value_z, 8192, 4096),
+    const SplitGdnInputProjectionPlan& split = plan.input_projection.split;
+    const FusedGdnInputProjectionPlan& fused = plan.input_projection.fused;
+    return HybridGdnInputProjectionPayload{
+        .split =
+            SplitGdnInputProjectionPayload{
+                .query_key = materialized_weight(materialized, split.query_key, 4096, 4096),
+                .value_z   = materialized_weight(materialized, split.value_z, 8192, 4096),
+            },
+        .query_key_value_z =
+            materialized_weight(materialized, fused.query_key_value_z, 12288, 4096),
     };
 }
 
@@ -197,11 +203,20 @@ void bind_text_layers(artifact::Binder& binder, BindingPlan& out, WeightsProfile
                 binder, prefix + "gdn/a_projection", NumericFormat::BF16, {32, 4096});
             target.gdn.b_projection = artifact::bind_device_tensor(
                 binder, prefix + "gdn/b_projection", NumericFormat::BF16, {32, 4096});
-            target.gdn.input_projection = SplitGdnInputProjectionPlan{
-                .query_key = bind_weight(binder, prefix + "gdn/query_key",
-                                         NumericFormat::Q4G64_F16S, {4096, 4096}),
-                .value_z   = bind_weight(binder, prefix + "gdn/value_z", NumericFormat::Q5G64_F16S,
-                                         {8192, 4096}),
+            target.gdn.input_projection = HybridGdnInputProjectionPlan{
+                .split =
+                    SplitGdnInputProjectionPlan{
+                        .query_key = bind_weight(binder, prefix + "gdn/query_key",
+                                                 NumericFormat::Q4G64_F16S, {4096, 4096}),
+                        .value_z   = bind_weight(binder, prefix + "gdn/value_z",
+                                                 NumericFormat::Q5G64_F16S, {8192, 4096}),
+                    },
+                .fused =
+                    FusedGdnInputProjectionPlan{
+                        .query_key_value_z =
+                            bind_weight(binder, prefix + "gdn/query_key_value_z",
+                                        NumericFormat::FP8_E4M3FN_ROW_BF16S, {12288, 4096}),
+                    },
             };
             target.gdn.norm = artifact::bind_device_tensor(binder, prefix + "gdn/norm",
                                                            NumericFormat::BF16, {128});

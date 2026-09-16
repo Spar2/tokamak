@@ -59,13 +59,21 @@ struct FusedGdnInputProjectionPlan {
     WeightPlan query_key_value_z;
 };
 
+// Hybrid plan: the groupwise split parents serve small token widths while the
+// native FP8 fused parent serves large widths. Both objects are required; an
+// artifact missing either fails loudly at bind time.
+struct HybridGdnInputProjectionPlan {
+    SplitGdnInputProjectionPlan split;
+    FusedGdnInputProjectionPlan fused;
+};
+
 struct GdnPlan {
     artifact::ObjectHandle a_log;
     artifact::ObjectHandle dt_bias;
     artifact::ObjectHandle convolution;
     artifact::ObjectHandle a_projection;
     artifact::ObjectHandle b_projection;
-    std::variant<SplitGdnInputProjectionPlan, FusedGdnInputProjectionPlan> input_projection;
+    HybridGdnInputProjectionPlan input_projection;
     artifact::ObjectHandle norm;
     WeightPlan output;
 };
@@ -146,8 +154,14 @@ struct FusedGdnInputProjectionPayload {
     Weight query_key_value_z;
 };
 
+struct HybridGdnInputProjectionPayload {
+    SplitGdnInputProjectionPayload split;
+    Weight query_key_value_z;
+};
+
 using GdnInputProjectionPayload =
-    std::variant<SplitGdnInputProjectionPayload, FusedGdnInputProjectionPayload>;
+    std::variant<SplitGdnInputProjectionPayload, FusedGdnInputProjectionPayload,
+                 HybridGdnInputProjectionPayload>;
 
 struct SplitGdnControlProjectionPayload {
     Weight a_projection;
