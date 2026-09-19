@@ -3,6 +3,7 @@
 #include "core/arena.h"
 #include "core/device.h"
 #include "core/tensor.h"
+#include "ninfer/ops/gdn_gating.h"
 
 #include <cuda_runtime.h>
 
@@ -30,7 +31,7 @@ namespace ninfer::ops {
  *
  *   a[h,t]    = sum_k a_weight[h,k] * x[k,t]
  *   b[h,t]    = sum_k b_weight[h,k] * x[k,t]
- *   g[h,t]    = -exp(A_log[h]) * softplus(a[h,t] + dt_bias[h])
+ *   g[h,t]    = gate_scale(A[h], formula) * softplus(a[h,t] + dt_bias[h])
  *   beta[h,t] = sigmoid(b[h,t]).
  *
  * `x` is contiguous BF16 [5120,T]; both weights are contiguous BF16_CTRL [48,5120]; A_log and
@@ -43,10 +44,12 @@ namespace ninfer::ops {
  * persistent state side effect.
  * `execution` supplies the stream and the selected device's physical multiprocessor count. The
  * latter may change private launch decomposition but never the mathematical result.
+ * `A` carries log-domain decay rates under GdnGateFormula::ExpScaled and direct decay scales
+ * under GdnGateFormula::RawMultiply; `formula` selects the interpretation explicitly.
  */
 void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_weight,
-                     const Tensor& A_log, const Tensor& dt_bias, WorkspaceArena& ws, Tensor& g,
-                     Tensor& beta, DeviceExecutionView execution);
+                      const Tensor& A, const Tensor& dt_bias, GdnGateFormula formula,
+                      WorkspaceArena& ws, Tensor& g, Tensor& beta, DeviceExecutionView execution);
 
 /**
  * Registered contiguous-parent storage forms of gdn_gating_proj:
@@ -58,9 +61,9 @@ void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_we
  * and produce FP32 g/beta `[heads,T]` under the same logical formula and oracle. All other effects
  * and non-overlap requirements match the two-weight form.
  */
-void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A_log,
-                     const Tensor& dt_bias, WorkspaceArena& ws, Tensor& g, Tensor& beta,
-                     DeviceExecutionView execution);
+void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A,
+                      const Tensor& dt_bias, GdnGateFormula formula, WorkspaceArena& ws, Tensor& g,
+                      Tensor& beta, DeviceExecutionView execution);
 
 /**
  * Applies the Qwen3.6 GDN input RMSNorm and control projection as one semantic Op:
@@ -69,7 +72,7 @@ void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A_l
  *   h_ideal[k,t] = n[k,t]
  *   a[r,t]    = sum_k a_weight[r,k] * n[k,t]
  *   b[r,t]    = sum_k b_weight[r,k] * n[k,t]
- *   g[r,t]    = -exp(A_log[r]) * softplus(a[r,t] + dt_bias[r])
+ *   g[r,t]    = gate_scale(A[r], formula) * softplus(a[r,t] + dt_bias[r])
  *   beta[r,t] = sigmoid(b[r,t]).
  *
  * `h` is the explicit BF16 output consumed by the other GDN projections. Its BF16 values are
@@ -83,14 +86,14 @@ void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A_l
  * (T<=128), without restricting the positive-T matrix contract.
  */
 void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
-                          const Weight& a_weight, const Weight& b_weight, const Tensor& A_log,
-                          const Tensor& dt_bias, WorkspaceArena& ws, Tensor& h, Tensor& g,
-                          Tensor& beta, DeviceExecutionView execution);
+                           const Weight& a_weight, const Weight& b_weight, const Tensor& A,
+                           const Tensor& dt_bias, GdnGateFormula formula, WorkspaceArena& ws,
+                           Tensor& h, Tensor& g, Tensor& beta, DeviceExecutionView execution);
 
 /** The Qwen3.8-27B and Qwen3.6-35B-A3B contiguous-parent storage forms described above. */
 void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
-                          const Weight& ab_weight, const Tensor& A_log, const Tensor& dt_bias,
-                          WorkspaceArena& ws, Tensor& h, Tensor& g, Tensor& beta,
-                          DeviceExecutionView execution);
+                           const Weight& ab_weight, const Tensor& A, const Tensor& dt_bias,
+                           GdnGateFormula formula, WorkspaceArena& ws, Tensor& h, Tensor& g,
+                           Tensor& beta, DeviceExecutionView execution);
 
 } // namespace ninfer::ops

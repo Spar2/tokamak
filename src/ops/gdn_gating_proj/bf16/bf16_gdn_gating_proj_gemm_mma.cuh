@@ -16,6 +16,8 @@
 #include "ops/common/rowsplit_mma.cuh"
 #include "ops/common/warp.cuh"
 
+#include "ninfer/ops/gdn_gating.h"
+
 #include <cuda_bf16.h>
 #include <cooperative_groups.h>
 
@@ -68,8 +70,9 @@ __global__ __launch_bounds__(Warps * 32, 1) void bf16_gdn_gating_proj_gemm_mma_k
     const __nv_bfloat16* __restrict__ x, const __nv_bfloat16* __restrict__ norm_weight,
     __nv_bfloat16* __restrict__ normalized_x, float norm_eps,
     const __nv_bfloat16* __restrict__ a_weight, const __nv_bfloat16* __restrict__ b_weight,
-    const float* __restrict__ A_log, const float* __restrict__ dt_bias, float* __restrict__ partial,
-    float* __restrict__ g, float* __restrict__ beta, std::int32_t t) {
+    const float* __restrict__ A, const float* __restrict__ dt_bias, GdnGateFormula formula,
+    float* __restrict__ partial, float* __restrict__ g, float* __restrict__ beta,
+    std::int32_t t) {
     constexpr int kBf16GdnHeads       = Geometry::kHeads;
     constexpr int kBf16GdnHidden      = Geometry::kHidden;
     constexpr int kBf16GdnBlockN      = Geometry::kBlockN;
@@ -272,7 +275,8 @@ __global__ __launch_bounds__(Warps * 32, 1) void bf16_gdn_gating_proj_gemm_mma_k
                 if constexpr (SplitK == 1) {
                     const std::int64_t out_i =
                         static_cast<std::int64_t>(token) * kBf16GdnHeads + row;
-                    g[out_i]    = -expf(A_log[row]) * softplus(av + dt_bias[row]);
+                    g[out_i] = (formula == GdnGateFormula::RawMultiply ? A[row] : -expf(A[row])) *
+                               softplus(av + dt_bias[row]);
                     beta[out_i] = sigmoid(bv);
                 } else {
                     const std::int64_t base =
@@ -350,7 +354,8 @@ __global__ __launch_bounds__(Warps * 32, 1) void bf16_gdn_gating_proj_gemm_mma_k
                 av *= inv;
                 bv *= inv;
             }
-            g[i]    = -expf(A_log[row]) * softplus(av + dt_bias[row]);
+            g[i] = (formula == GdnGateFormula::RawMultiply ? A[row] : -expf(A[row])) *
+                   softplus(av + dt_bias[row]);
             beta[i] = sigmoid(bv);
         }
     }

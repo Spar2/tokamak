@@ -19,10 +19,9 @@
 //   host matrix is (48,5120) hh-major, ssm_conv host matrix is (10240,4),
 //   NO transposes. Validated decisively: Prism conv_output_silu token-0
 //   matches the direct-order computation to 4 decimals on all channels.
-// Consequence: ops::gdn_gating_proj (which bakes -exp(A_log)) is NOT usable
-// for Bonsai. Gate math (alpha/beta GEMV + raw gate formula) is host-side
-// test staging here (FP64, documented); production needs a raw-gate op
-// variant. All other stages call production ops with artifact values.
+// Consequence: Bonsai selects GdnGateFormula::RawMultiply explicitly at the
+// production gdn_gating_proj call below (host-side gate math was removed).
+// All other stages call production ops with artifact values.
 // NOTE: the conv split kernel consumes weight bytes TAP-MAJOR ([4,C] order:
 // slot [j*C+c]) under the logical Tensor{C,4} descriptor (deduced from its
 // own test's offset() oracle and confirmed on-device); the header's "[C,4]"
@@ -42,6 +41,7 @@
 #include "ninfer/ops/causal_conv1d_silu.h"
 #include "ninfer/ops/gated_delta_net.h"
 #include "ninfer/ops/gated_rmsnorm.h"
+#include "ninfer/ops/gdn_gating_proj.h"
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/residual_add.h"
 #include "ninfer/ops/rmsnorm.h"
@@ -152,10 +152,6 @@ void upload_bf16(const float* host, void* device, std::size_t n) {
     CUDA_CHECK(cudaMemcpy(device, bits.data(), n * 2, cudaMemcpyHostToDevice));
 }
 
-void upload_f32(const float* host, void* device, std::size_t n) {
-    CUDA_CHECK(cudaMemcpy(device, host, n * 4, cudaMemcpyHostToDevice));
-}
-
 // Oracle vectors are numpy (rows,T) C-order: element (i,t) at i*T+t.
 // NInfer Tensors are ne0-fastest: element (i,t) at i + rows*t. Transpose the
 // reference to column-major before comparing (identity at T=1).
@@ -251,19 +247,42 @@ int main() {
         const std::vector<float> f_an = get_f32(h_an, 5120);
         const std::vector<float> f_pn = get_f32(h_pn, 5120);
         const std::vector<float> f_sn = get_f32(h_sn, 128);
-        const std::vector<float> f_sa = get_f32(h_sa, 48);
-        const std::vector<float> f_sdt = get_f32(h_sdt, 48);
         const std::vector<float> f_sc = get_f32(h_sc, 4 * 10240);
-        // Host F32 copies of alpha/beta, GGUF ne0-fastest: byte f =
-        // (k=f%5120, hh=f//5120), host matrix [hh,k] = f[hh*5120+k].
-        // (Same rule as conv, Prism-validated there to 4 decimals.)
-        auto bf16_bits_to_f32 = [&](const std::vector<std::uint16_t>& bits) {
-            std::vector<float> out(bits.size());
-            for (std::size_t i = 0; i < bits.size(); ++i) { out[i] = bf16_to_f32(bits[i]); }
-            return out;
+
+        // Production alpha/beta weights: GGUF [5120,48] ne0-fastest bytes are
+        // already [48,5120] row-major order (byte f holds torch (hh=f//5120,
+        // k=f%5120)), so the artifact payload uploads DIRECTLY as BF16_CTRL
+        // [48,5120] Weight views. These feed the REAL production
+        // gdn_gating_proj with GdnGateFormula::RawMultiply below.
+        DeviceBuffer d_alpha(48 * 5120 * 2), d_beta(48 * 5120 * 2);
+        {
+            const std::vector<std::uint16_t> a_bits = get_bf16_bits(h_alpha, 5120 * 48);
+            const std::vector<std::uint16_t> b_bits = get_bf16_bits(h_beta, 5120 * 48);
+            d_alpha.copy_from_host(a_bits.data(), a_bits.size() * 2);
+            d_beta.copy_from_host(b_bits.data(), b_bits.size() * 2);
+        }
+        auto bf16_ctrl_weight = [](void* payload, std::int32_t rows, std::int32_t cols) {
+            Weight w{};
+            w.payload         = payload;
+            w.qdata           = payload;
+            w.payload_bytes   = static_cast<std::uint64_t>(rows) * cols * 2;
+            w.qtype           = QType::BF16_CTRL;
+            w.layout          = QuantLayout::Contiguous;
+            w.n               = rows;
+            w.k               = cols;
+            w.ndim            = 2;
+            w.shape[0]        = rows;
+            w.shape[1]        = cols;
+            w.padded_shape[0] = rows;
+            w.padded_shape[1] = cols;
+            return w;
         };
-        const std::vector<float> f_alpha = bf16_bits_to_f32(get_bf16_bits(h_alpha, 5120 * 48));
-        const std::vector<float> f_beta  = bf16_bits_to_f32(get_bf16_bits(h_beta, 5120 * 48));
+        const Weight w_alpha = bf16_ctrl_weight(d_alpha.p, 48, 5120);
+        const Weight w_beta  = bf16_ctrl_weight(d_beta.p, 48, 5120);
+        const Tensor t_sa =
+            artifact::materialized_tensor(materialized, h_sa, artifact::NumericFormat::FP32, {48});
+        const Tensor t_sdt =
+            artifact::materialized_tensor(materialized, h_sdt, artifact::NumericFormat::FP32, {48});
 
         // Persistent device staging (test-owned, mirrors converter policy):
         // norms F32->BF16 cast; conv DIRECT copy [10240,4] + BF16 cast (GGUF
@@ -351,7 +370,7 @@ int main() {
                 ops::gated_delta_net_workspace_capacity_bytes(16, 48, true, T, T), 256));
             double ms_oth_total = 0.0;
             CudaEventTimer t_all(device), t_fw(device), t_lin(device), t_gdn(device),
-                t_oth(device);
+                t_oth(device), t_gate(device);
             t_all.start();
             // 1. attn norm (PLAIN gain: unit_offset=false, Prism-true).
             t_oth.start();
@@ -407,29 +426,23 @@ int main() {
                 ok &= check_vec(d2h_bf16(d_z.p, 6144).data(),
                                 load_ref(vdir, T, "z", 6144).data(), 6144, "z", kLin);
             }
-            // 3. Gate staging (host FP64, Prism-true raw multiply; production
-            // needs a raw-gate gdn_gating_proj variant — recorded gap).
-            // Host-staged (D2H + FP64 GEMV + H2D); excluded from device split.
+            // 3. Control projection via the REAL production op with the
+            // explicitly selected RawMultiply formula (Bonsai semantics).
+            t_gate.start();
             {
-                const std::vector<float> h = d2h_bf16(d_h.p, 5120 * T);
-                std::vector<float> g(48 * T), b(48 * T);
-                for (int t = 0; t < T; ++t) {
-                    for (int hh = 0; hh < 48; ++hh) {
-                        double ar = 0.0, br = 0.0;
-                        for (int k = 0; k < 5120; ++k) {
-                            const double hv = h[static_cast<std::size_t>(t) * 5120 + k];
-                            ar += (double)f_alpha[static_cast<std::size_t>(hh) * 5120 + k] * hv;
-                            br += (double)f_beta[static_cast<std::size_t>(hh) * 5120 + k] * hv;
-                        }
-                        g[static_cast<std::size_t>(t) * 48 + hh] =
-                            (float)((double)f_sa[hh] *
-                                    std::log1p(std::exp(ar + (double)f_sdt[hh])));
-                        b[static_cast<std::size_t>(t) * 48 + hh] =
-                            (float)(1.0 / (1.0 + std::exp(-br)));
-                    }
-                }
-                upload_f32(g.data(), d_g.p, 48 * T);
-                upload_f32(b.data(), d_b.p, 48 * T);
+                DeviceArena ws_gate(std::max<std::size_t>(
+                    ops::gdn_gating_proj_workspace_capacity_bytes(48, 5120, T, T), 256));
+                const Tensor h(d_h.p, DType::BF16, {5120, T});
+                Tensor g(d_g.p, DType::FP32, {48, T});
+                Tensor b(d_b.p, DType::FP32, {48, T});
+                ops::gdn_gating_proj(h, w_alpha, w_beta, t_sa, t_sdt,
+                                     ops::GdnGateFormula::RawMultiply, ws_gate, g, b,
+                                     device.execution_view());
+            }
+            t_gate.record_stop();
+            device.synchronize();
+            const double ms_gate = t_gate.elapsed_ms();
+            {
                 if (T > 1) {
                     ok &= check_vec(d2h_f32(d_g.p, 48 * T).data(),
                                     as_column_major(load_ref(vdir, T, "gate_g", 48 * T), 48, T)
@@ -651,9 +664,9 @@ int main() {
             ok &= check_vec(d2h_bf16(d_lout.p, 5120 * T).data(),
                             as_column_major(load_ref(vdir, T, "l_out", 5120 * T), 5120, T).data(),
                             5120 * T, T == 1 ? "l_out" : "l_out_T", kFinal);
-            std::printf("T=%d e2e %.3fms (fwht %.3f lin %.3f gdn %.3f other %.3f)\n", T,
-                        t_all.elapsed_ms(), ms_fw1 + ms_fw2 + ms_fw3 + ms_fw4,
-                        ms_lin1 + ms_lin2 + ms_lin3 + ms_lin4, ms_gdn, ms_oth_total);
+            std::printf("T=%d e2e %.3fms (fwht %.3f lin %.3f gate %.3f gdn %.3f other %.3f)\n",
+                        T, t_all.elapsed_ms(), ms_fw1 + ms_fw2 + ms_fw3 + ms_fw4,
+                        ms_lin1 + ms_lin2 + ms_lin3 + ms_lin4, ms_gate, ms_gdn, ms_oth_total);
         }
 
         std::printf("%s BQ2_BLOCK8\n", ok ? "OK" : "FAIL");
@@ -715,34 +728,22 @@ int main() {
                     ops::linear(hr, w_gate, z, stream);
                 }
                 {
-                    // Sync: the blocking D2H below runs on the default stream
-                    // and does NOT wait for device.stream kernels. (Missing
-                    // this sync caused intermittent garbage reads — the only
-                    // flakiness ever observed in this harness.)
+                    // Production control projection (RawMultiply), same as the
+                    // main loop. out.h still needs the host copy for capture.
                     device.synchronize();
-                    const std::vector<float> h = d2h_bf16(d_h.p, 5120 * T);
-                    if (capture) { out.h = h; }
-                    std::vector<float> g(48 * T), b(48 * T);
-                    for (int t = 0; t < T; ++t) {
-                        for (int hh = 0; hh < 48; ++hh) {
-                            double ar = 0.0, br = 0.0;
-                            for (int k = 0; k < 5120; ++k) {
-                                const double hv = h[static_cast<std::size_t>(t) * 5120 + k];
-                                ar += (double)f_alpha[static_cast<std::size_t>(hh) * 5120 + k] * hv;
-                                br += (double)f_beta[static_cast<std::size_t>(hh) * 5120 + k] * hv;
-                            }
-                            g[static_cast<std::size_t>(t) * 48 + hh] =
-                                (float)((double)f_sa[hh] *
-                                        std::log1p(std::exp(ar + (double)f_sdt[hh])));
-                            b[static_cast<std::size_t>(t) * 48 + hh] =
-                                (float)(1.0 / (1.0 + std::exp(-br)));
-                        }
-                    }
-                    upload_f32(g.data(), d_g.p, 48 * T);
-                    upload_f32(b.data(), d_b.p, 48 * T);
+                    if (capture) { out.h = d2h_bf16(d_h.p, 5120 * T); }
+                    DeviceArena ws_gate(std::max<std::size_t>(
+                        ops::gdn_gating_proj_workspace_capacity_bytes(48, 5120, T, T), 256));
+                    const Tensor h(d_h.p, DType::BF16, {5120, T});
+                    Tensor g(d_g.p, DType::FP32, {48, T});
+                    Tensor b(d_b.p, DType::FP32, {48, T});
+                    ops::gdn_gating_proj(h, w_alpha, w_beta, t_sa, t_sdt,
+                                         ops::GdnGateFormula::RawMultiply, ws_gate, g, b,
+                                         device.execution_view());
+                    device.synchronize();
                     if (capture) {
-                        out.g = g;
-                        out.b = b;
+                        out.g = d2h_f32(d_g.p, 48 * T);
+                        out.b = d2h_f32(d_b.p, 48 * T);
                     }
                 }
                 {

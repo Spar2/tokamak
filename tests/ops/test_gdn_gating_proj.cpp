@@ -44,6 +44,14 @@ double softplus(double value) {
     return std::max(value, 0.0) + std::log1p(std::exp(-std::abs(value)));
 }
 
+double gate_scale(double a_value, ops::GdnGateFormula formula) {
+    return formula == ops::GdnGateFormula::RawMultiply ? a_value : -std::exp(a_value);
+}
+
+const char* formula_tag(ops::GdnGateFormula formula) {
+    return formula == ops::GdnGateFormula::RawMultiply ? "raw" : "exp";
+}
+
 double sigmoid(double value) {
     if (value >= 0.0) { return 1.0 / (1.0 + std::exp(-value)); }
     const double e = std::exp(value);
@@ -97,8 +105,8 @@ std::vector<std::int32_t> oracle_tokens(std::int32_t tokens) {
 void projection_oracle(const Geometry& geometry, const std::vector<float>& x,
                        const std::vector<float>& a_weight, const std::vector<float>& b_weight,
                        const std::vector<float>& a_log, const std::vector<float>& dt_bias,
-                       const std::vector<std::int32_t>& selected_tokens, std::vector<double>& g,
-                       std::vector<double>& beta) {
+                       ops::GdnGateFormula formula, const std::vector<std::int32_t>& selected_tokens,
+                       std::vector<double>& g, std::vector<double>& beta) {
     const std::size_t output_elements =
         static_cast<std::size_t>(geometry.heads) * selected_tokens.size();
     g.resize(output_elements);
@@ -121,7 +129,7 @@ void projection_oracle(const Geometry& geometry, const std::vector<float>& x,
                     value;
             }
             const std::size_t output = sample * geometry.heads + head;
-            g[output]                = -std::exp(static_cast<double>(a_log[head])) *
+            g[output]                = gate_scale(static_cast<double>(a_log[head]), formula) *
                         softplus(projected_a + static_cast<double>(dt_bias[head]));
             beta[output] = sigmoid(projected_b);
         }
@@ -132,8 +140,9 @@ void norm_projection_oracle(const Geometry& geometry, const std::vector<float>& 
                             const std::vector<float>& norm_weight,
                             const std::vector<float>& a_weight, const std::vector<float>& b_weight,
                             const std::vector<float>& a_log, const std::vector<float>& dt_bias,
-                            std::int32_t tokens, double eps, std::vector<double>& h,
-                            std::vector<double>& g, std::vector<double>& beta) {
+                            ops::GdnGateFormula formula, std::int32_t tokens, double eps,
+                            std::vector<double>& h, std::vector<double>& g,
+                            std::vector<double>& beta) {
     h.resize(static_cast<std::size_t>(geometry.hidden) * tokens);
     g.resize(static_cast<std::size_t>(geometry.heads) * tokens);
     beta.resize(static_cast<std::size_t>(geometry.heads) * tokens);
@@ -169,7 +178,7 @@ void norm_projection_oracle(const Geometry& geometry, const std::vector<float>& 
                     value;
             }
             const std::size_t output = static_cast<std::size_t>(token) * geometry.heads + head;
-            g[output]                = -std::exp(static_cast<double>(a_log[head])) *
+            g[output]                = gate_scale(static_cast<double>(a_log[head]), formula) *
                         softplus(projected_a + static_cast<double>(dt_bias[head]));
             beta[output] = sigmoid(projected_b);
         }
@@ -219,7 +228,7 @@ int verify_inputs_unchanged(const std::string& label, const DeviceBuffer& device
 }
 
 int run_projection_case(const Geometry& geometry, std::int32_t tokens, std::uint32_t seed,
-                        DeviceExecutionView execution) {
+                        ops::GdnGateFormula formula, DeviceExecutionView execution) {
     std::vector<float> x(static_cast<std::size_t>(geometry.hidden) * tokens);
     std::vector<float> a_weight(static_cast<std::size_t>(geometry.heads) * geometry.hidden);
     std::vector<float> b_weight(static_cast<std::size_t>(geometry.heads) * geometry.hidden);
@@ -235,8 +244,8 @@ int run_projection_case(const Geometry& geometry, std::int32_t tokens, std::uint
 
     const std::vector<std::int32_t> selected = oracle_tokens(tokens);
     std::vector<double> reference_g, reference_beta;
-    projection_oracle(geometry, x, a_weight, b_weight, a_log, dt_bias, selected, reference_g,
-                      reference_beta);
+    projection_oracle(geometry, x, a_weight, b_weight, a_log, dt_bias, formula, selected,
+                      reference_g, reference_beta);
 
     const std::vector<std::uint16_t> x_bits        = bf16_bits(x);
     std::vector<std::uint16_t> weight_bits         = bf16_bits(a_weight);
@@ -267,20 +276,21 @@ int run_projection_case(const Geometry& geometry, std::int32_t tokens, std::uint
 
     if (geometry.parent_weight) {
         Weight parent = bf16_weight(device_weight.p, 2 * geometry.heads, geometry.hidden);
-        ops::gdn_gating_proj(tensor_x, parent, tensor_a_log, tensor_dt_bias, workspace, tensor_g,
-                             tensor_beta, execution);
+        ops::gdn_gating_proj(tensor_x, parent, tensor_a_log, tensor_dt_bias, formula, workspace,
+                             tensor_g, tensor_beta, execution);
     } else {
         Weight weight_a = bf16_weight(device_weight.p, geometry.heads, geometry.hidden);
         Weight weight_b = bf16_weight(device_b_weight.p, geometry.heads, geometry.hidden);
-        ops::gdn_gating_proj(tensor_x, weight_a, weight_b, tensor_a_log, tensor_dt_bias, workspace,
-                             tensor_g, tensor_beta, execution);
+        ops::gdn_gating_proj(tensor_x, weight_a, weight_b, tensor_a_log, tensor_dt_bias, formula,
+                             workspace, tensor_g, tensor_beta, execution);
     }
     cuda_synchronize();
 
     const std::vector<double> full_g    = read_fp32(device_g.data(), output_elements);
     const std::vector<double> full_beta = read_fp32(device_beta.data(), output_elements);
     const std::string label =
-        std::string("gdn_gating_proj ") + geometry.label + " T=" + std::to_string(tokens);
+        std::string("gdn_gating_proj ") + geometry.label + " T=" + std::to_string(tokens) +
+        " formula=" + formula_tag(formula);
     int failures = 0;
     failures += require_all_finite(label + " g", full_g);
     failures += require_all_finite(label + " beta", full_beta);
@@ -305,7 +315,8 @@ int run_projection_case(const Geometry& geometry, std::int32_t tokens, std::uint
 }
 
 int run_norm_projection_case(const Geometry& geometry, std::int32_t tokens, std::uint32_t seed,
-                             DeviceExecutionView execution, bool replay = false, int mode = 0) {
+                             ops::GdnGateFormula formula, DeviceExecutionView execution,
+                             bool replay = false, int mode = 0) {
     constexpr float kEps               = 1.0e-6f;
     const std::size_t h_elements       = std::size_t(geometry.hidden) * tokens;
     const std::size_t control_elements = std::size_t(geometry.heads) * tokens;
@@ -361,9 +372,10 @@ int run_norm_projection_case(const Geometry& geometry, std::int32_t tokens, std:
                         : bf16_weight(device_b_weight.p, geometry.heads, geometry.hidden);
     const auto launch = [&] {
         if (geometry.parent_weight)
-            ops::gdn_norm_gating_proj(tx, tn, kEps, wa, ta, td, workspace, th, tg, tb, execution);
+            ops::gdn_norm_gating_proj(tx, tn, kEps, wa, ta, td, formula, workspace, th, tg, tb,
+                                      execution);
         else
-            ops::gdn_norm_gating_proj(tx, tn, kEps, wa, wb, ta, td, workspace, th, tg, tb,
+            ops::gdn_norm_gating_proj(tx, tn, kEps, wa, wb, ta, td, formula, workspace, th, tg, tb,
                                       execution);
     };
     DecodeGraphDefinition definition;
@@ -403,11 +415,12 @@ int run_norm_projection_case(const Geometry& geometry, std::int32_t tokens, std:
             launch();
         cuda_synchronize(execution.stream);
         std::vector<double> rh, rg, rb;
-        norm_projection_oracle(geometry, x, norm_weight, a_weight, b_weight, a_log, dt_bias, tokens,
-                               kEps, rh, rg, rb);
+        norm_projection_oracle(geometry, x, norm_weight, a_weight, b_weight, a_log, dt_bias, formula,
+                               tokens, kEps, rh, rg, rb);
         const std::string label = std::string("gdn_norm_gating_proj ") + geometry.label +
                                   " T=" + std::to_string(tokens) + " mode=" + std::to_string(mode) +
-                                  " phase=" + std::to_string(phase);
+                                  " phase=" + std::to_string(phase) + " formula=" +
+                                  formula_tag(formula);
         failures += verify_normwise(label + " h", from_device_bf16(device_h.data(), h_elements), rh,
                                     kGdnNormOutputBf16);
         failures += verify_normwise(label + " g", read_fp32(device_g.data(), control_elements), rg,
@@ -486,42 +499,66 @@ int main() {
     // Every registered 27B projection route, including predicated and full token tiles.
     for (const std::int32_t tokens : {1, 8, 9, 1024, 1025, 2049, 4097}) {
         failures += run_projection_case(kQwen27, tokens,
-                                        0x1000u + static_cast<std::uint32_t>(tokens), execution);
+                                        0x1000u + static_cast<std::uint32_t>(tokens), ops::GdnGateFormula::ExpScaled, execution);
     }
     // The Qwen3.8 parent changes only the public storage boundary. One direct oracle case proves
     // its [A,B] row partition; the split 27B cases above cover every unchanged execution route.
-    failures += run_projection_case(kQwen38Parent, 1, 0x1801u, execution);
+    failures += run_projection_case(kQwen38Parent, 1, 0x1801u, ops::GdnGateFormula::ExpScaled,
+                                      execution);
     // Every registered 35B projection route and its contiguous-parent storage contract.
     for (const std::int32_t tokens : {1, 127, 128, 1024, 1025, 2049, 4097}) {
         failures += run_projection_case(kQwen35, tokens,
-                                        0x2000u + static_cast<std::uint32_t>(tokens), execution);
+                                        0x2000u + static_cast<std::uint32_t>(tokens), ops::GdnGateFormula::ExpScaled, execution);
     }
 
     // Direct complete norm/control oracles across variable widths and the existing 35B profile.
-    failures += run_norm_projection_case(kQwen27, 1, 0x3001u, norm_execution);
-    failures += run_norm_projection_case(kQwen27, 9, 0x3009u, norm_execution);
-    failures += run_norm_projection_case(kQwen27, 64, 0x3040u, norm_execution);
+    failures += run_norm_projection_case(kQwen27, 1, 0x3001u, ops::GdnGateFormula::ExpScaled, norm_execution);
+    failures += run_norm_projection_case(kQwen27, 9, 0x3009u, ops::GdnGateFormula::ExpScaled, norm_execution);
+    failures += run_norm_projection_case(kQwen27, 64, 0x3040u, ops::GdnGateFormula::ExpScaled, norm_execution);
     for (int tokens = 1; tokens <= 128; ++tokens)
         failures +=
-            run_norm_projection_case(kQwen38Parent, tokens, 0x3800u + tokens, norm_execution);
+            run_norm_projection_case(kQwen38Parent, tokens, 0x3800u + tokens, ops::GdnGateFormula::ExpScaled, norm_execution);
     for (int tokens : {1, 2, 3, 8, 9, 14, 15, 16, 28, 29, 32, 42, 43, 64, 96, 128, 129, 256})
         failures +=
-            run_norm_projection_case(kQwen38Parent, tokens, 0x4800u + tokens, norm_execution, true);
+            run_norm_projection_case(kQwen38Parent, tokens, 0x4800u + tokens,
+                                     ops::GdnGateFormula::ExpScaled, norm_execution, true);
     for (int mode : {1, 2, 3, 4})
         failures +=
-            run_norm_projection_case(kQwen38Parent, 16, 0x5800u + mode, norm_execution, true, mode);
-    failures += run_norm_projection_case(kQwen35, 1, 0x4001u, norm_execution);
-    failures += run_norm_projection_case(kQwen35, 16, 0x4010u, norm_execution);
-    failures += run_norm_projection_case(kQwen35, 17, 0x4011u, norm_execution);
-    failures += run_norm_projection_case(kQwen35, 64, 0x4040u, norm_execution);
+            run_norm_projection_case(kQwen38Parent, 16, 0x5800u + mode,
+                                     ops::GdnGateFormula::ExpScaled, norm_execution, true, mode);
+    failures += run_norm_projection_case(kQwen35, 1, 0x4001u, ops::GdnGateFormula::ExpScaled, norm_execution);
+    failures += run_norm_projection_case(kQwen35, 16, 0x4010u, ops::GdnGateFormula::ExpScaled, norm_execution);
+    failures += run_norm_projection_case(kQwen35, 17, 0x4011u, ops::GdnGateFormula::ExpScaled, norm_execution);
+    failures += run_norm_projection_case(kQwen35, 64, 0x4040u, ops::GdnGateFormula::ExpScaled, norm_execution);
 
     // Requalify the retained BF16-staging profile at every prefill reduction boundary.
     for (int tokens : {1024, 1025, 2048, 2049, 4097})
         failures +=
-            run_norm_projection_case(kQwen38Parent, tokens, 0x6800u + tokens, norm_execution);
+            run_norm_projection_case(kQwen38Parent, tokens, 0x6800u + tokens, ops::GdnGateFormula::ExpScaled, norm_execution);
     for (int tokens : {2, 8, 15, 127, 128, 1024, 1025, 2048, 2049, 4097})
-        failures += run_norm_projection_case(kQwen35, tokens, 0x7800u + tokens, norm_execution,
+        failures += run_norm_projection_case(kQwen35, tokens, 0x7800u + tokens,
+                                             ops::GdnGateFormula::ExpScaled, norm_execution,
                                              tokens == 15);
+
+    // RawMultiply formula (Ternary Bonsai): focused route coverage on the
+    // geometries and schedules Bonsai production uses. 27B split + parent at
+    // T=1 (gemv), T=8 (small-T), T=64 (mma-split8); 35B spot checks (simt,
+    // mma); norm variants for the fused-27, composed, and 38-parent paths.
+    constexpr auto kRaw = ops::GdnGateFormula::RawMultiply;
+    for (const std::int32_t tokens : {1, 8, 64}) {
+        failures +=
+            run_projection_case(kQwen27, tokens, 0x9000u + static_cast<std::uint32_t>(tokens),
+                                kRaw, execution);
+    }
+    failures += run_projection_case(kQwen38Parent, 8, 0x9808u, kRaw, execution);
+    for (const std::int32_t tokens : {1, 16}) {
+        failures +=
+            run_projection_case(kQwen35, tokens, 0xA000u + static_cast<std::uint32_t>(tokens),
+                                kRaw, execution);
+    }
+    failures += run_norm_projection_case(kQwen27, 1, 0xB001u, kRaw, norm_execution);
+    failures += run_norm_projection_case(kQwen27, 9, 0xB009u, kRaw, norm_execution);
+    failures += run_norm_projection_case(kQwen38Parent, 16, 0xB810u, kRaw, norm_execution);
 
     std::cout << (failures == 0 ? "OK" : "FAIL") << " gdn_gating_proj correctness\n";
     return failures == 0 ? 0 : 1;
