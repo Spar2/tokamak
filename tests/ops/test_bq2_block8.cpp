@@ -150,6 +150,11 @@ void upload_bf16(const float* host, void* device, std::size_t n) {
     std::vector<std::uint16_t> bits(n);
     for (std::size_t i = 0; i < n; ++i) { bits[i] = f32_to_bf16(host[i]); }
     CUDA_CHECK(cudaMemcpy(device, bits.data(), n * 2, cudaMemcpyHostToDevice));
+    // Pageable H2D copies may return before the transfer completes; settle
+    // the default stream before kernels consume the buffer (same rule as
+    // DeviceBuffer::copy_from_host). Missing this caused intermittent
+    // garbage inputs at larger T.
+    CUDA_CHECK(cudaStreamSynchronize(nullptr));
 }
 
 // Oracle vectors are numpy (rows,T) C-order: element (i,t) at i*T+t.
@@ -219,6 +224,7 @@ int main() {
         DeviceContext device(0);
         const cudaStream_t stream = device.stream;
         artifact::MaterializedArtifact materialized = artifact::materialize(reader, plan, device);
+        device.synchronize(); // settle materialization uploads before host reads below
         auto mat_t2 = [&](artifact::ObjectHandle h, std::int32_t rows, std::int32_t cols) {
             return artifact::materialized_weight(materialized, h,
                                                  artifact::NumericFormat::T2G128_F16S, rows, cols);
@@ -853,13 +859,10 @@ int main() {
                     }
                 }
             };
-            StabOut warm, got;
+            StabOut got;
             CudaEventTimer t_s(device);
             t_s.start();
-            run_block(warm, false); // warmup (discard): first execution at a
-                                    // fresh T/config still shows rare
-                                    // first-run divergence (filed follow-up)
-            run_block(got, true);   // measured run: absolute oracle verdicts
+            run_block(got, true);
             const double ms_stab = t_s.stop_ms();
             std::printf("== T=%d ==\n", T);
             ok &= check_vec(got.h.data(),
