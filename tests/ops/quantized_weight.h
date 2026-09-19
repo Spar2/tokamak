@@ -158,13 +158,18 @@ inline QuantSpec quant_spec(QType qtype) {
         return {6, 64, 31, -32};
     case QType::W8G32_F16S:
         return {8, 32, 127, -127};
+    case QType::T2G128_F16S:
+        // Ternary logical domain {-1,0,+1} (+2 reserved); stored unsigned 0..3.
+        return {2, 128, 1, -1};
     default:
         throw std::invalid_argument("row-split test packer: unsupported qtype");
     }
 }
 
 inline int nibble_bytes_per_group(const QuantSpec& spec) {
-    return spec.bits == 8 ? spec.group_size : spec.group_size / 2;
+    if (spec.bits == 8) { return spec.group_size; }
+    if (spec.bits == 2) { return spec.group_size / 4; }
+    return spec.group_size / 2;
 }
 
 inline int high_bytes_per_group(const QuantSpec& spec) {
@@ -181,6 +186,14 @@ inline void pack_lowbit_group(const std::int8_t* codes, const QuantSpec& spec,
     if (spec.bits == 8) {
         for (int i = 0; i < spec.group_size; ++i) {
             nibble_out[i] = static_cast<std::uint8_t>(codes[i]);
+        }
+        return;
+    }
+    if (spec.bits == 2) {
+        // Ternary: signed logical codes {-1,0,+1} stored as (code + 1) LSB-first.
+        for (int i = 0; i < spec.group_size; ++i) {
+            const std::uint32_t u = static_cast<std::uint32_t>(codes[i] + 1) & 0x03u;
+            nibble_out[i >> 2] |= static_cast<std::uint8_t>(u << ((i & 3) * 2));
         }
         return;
     }
@@ -208,6 +221,10 @@ inline void pack_lowbit_group(const std::int8_t* codes, const QuantSpec& spec,
 inline int unpack_lowbit_code(const std::uint8_t* nibble, const std::uint8_t* high,
                               const QuantSpec& spec, int index) {
     if (spec.bits == 8) { return static_cast<std::int8_t>(nibble[index]); }
+    if (spec.bits == 2) {
+        const std::uint32_t u = (nibble[index >> 2] >> ((index & 3) * 2)) & 0x03u;
+        return static_cast<int>(u) - 1;
+    }
     const std::uint8_t low_byte = nibble[index >> 1];
     const std::uint32_t low     = (index & 1) ? (low_byte >> 4) : (low_byte & 0x0fu);
     std::uint32_t hi            = 0;

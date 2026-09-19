@@ -200,6 +200,9 @@ add_library(ninfer_ops STATIC
   ops/linear/q4/q4_rowsplit_gemm_simt.cu
   ops/linear/q4/q4_rowsplit_gemv.cu
   ops/linear/q4/q4_dispatch.cpp
+  ops/linear/t2/t2_rowsplit_gemv.cu
+  ops/linear/t2/t2_rowsplit_smallt.cu
+  ops/linear/t2/t2_dispatch.cpp
   ops/linear/q5/q5_dispatch.cpp
   ops/linear/q5/q5_rowsplit_gemm_mma.cu
   ops/linear/q5/q5_rowsplit_gemm_simt.cu

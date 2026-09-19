@@ -228,8 +228,18 @@ quantized_weight::PackedWeight make_q6g64_f16s_weight(std::int32_t n, std::int32
 }
 
 quantized_weight::PackedWeight make_w8g32_f16s_weight(std::int32_t n, std::int32_t k,
-                                                      std::uint32_t seed) {
+                                                       std::uint32_t seed) {
     return quantized_weight::make_patterned_weight(QType::W8G32_F16S, n, k, seed,
+                                                   {quantized_weight::RowSplitScalePattern::Small,
+                                                    quantized_weight::RowSplitCodePattern::Hashed});
+}
+
+quantized_weight::PackedWeight make_t2g128_f16s_weight(std::int32_t n, std::int32_t k,
+                                                       std::uint32_t seed) {
+    if ((k % 128) != 0) {
+        throw std::invalid_argument("t2 fixture: K must be a multiple of 128");
+    }
+    return quantized_weight::make_patterned_weight(QType::T2G128_F16S, n, k, seed,
                                                    {quantized_weight::RowSplitScalePattern::Small,
                                                     quantized_weight::RowSplitCodePattern::Hashed});
 }
