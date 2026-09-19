@@ -75,6 +75,12 @@ void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A,
  *   g[r,t]    = gate_scale(A[r], formula) * softplus(a[r,t] + dt_bias[r])
  *   beta[r,t] = sigmoid(b[r,t]).
  *
+ * The fused input normalization bakes the unit-offset convention (gain 1+w);
+ * plain-gain models (e.g. Ternary Bonsai) must use the composed path
+ * (rmsnorm with unit_offset=false, then gdn_gating_proj) instead. See the
+ * rmsnorm representation contract. The gate formula itself is explicit via
+ * `formula` in both forms.
+ *
  * `h` is the explicit BF16 output consumed by the other GDN projections. Its BF16 values are
  * promoted and compared directly with `h_ideal`; final storage rounding is not reproduced inside
  * the oracle. The control branch is evaluated directly from `n` and is not required to round

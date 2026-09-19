@@ -113,6 +113,56 @@ int run_case(const char* label, const Shape& shape, bool unit_offset, std::uint3
     return failures;
 }
 
+// Gain-convention contract (OPTION A: artifacts preserve source semantics).
+// Bonsai-regime weights (~1.0-centered plain gains) run under BOTH flags with
+// identical inputs: each output must match its own oracle, and the two outputs
+// must differ by ~1x (pins that unit_offset is load-bearing, not decorative).
+// Qwen-family artifacts store ~0-centered weights with unit_offset=true;
+// Bonsai artifacts store ~1.0 plain gains with unit_offset=false.
+int run_gain_convention_case() {
+    constexpr std::int32_t kD = 5120;
+    std::vector<float> input(kD), weight(kD);
+    fill_uniform(input, 2101U, -4.0F, 4.0F);
+    fill_uniform(weight, 2102U, 0.5F, 1.5F);
+    round_to_bf16(input);
+    round_to_bf16(weight);
+    const Shape shape{kD, 1};
+
+    DeviceContext device;
+    int failures = 0;
+    std::vector<double> out_plain, out_offset;
+    for (bool offset : {false, true}) {
+        DeviceInput device_input  = make_input(input, false);
+        DeviceInput device_weight = make_input(weight, false);
+        GuardedDeviceBuffer output(shape.elements() * sizeof(std::uint16_t));
+        output.fill(0xff);
+        Tensor input_tensor   = tensor_for(device_input.data, shape);
+        Tensor weight_tensor  = Tensor(device_weight.data, DType::BF16, {shape.d});
+        Tensor output_tensor  = tensor_for(output.data(), shape);
+        ops::rmsnorm(input_tensor, weight_tensor, kEps, offset, output_tensor, device.stream);
+        cuda_synchronize(device.stream);
+        const std::vector<double> got = from_device_bf16(output.data(), shape.elements());
+        const std::vector<double> ref = rmsnorm_oracle(input, weight, shape, offset);
+        failures += verify_reduction(
+            offset ? "rmsnorm gain-convention offset" : "rmsnorm gain-convention plain", got, ref,
+            rmsnorm_bf16_criterion());
+        (offset ? out_offset : out_plain) = got;
+    }
+    double mean_abs_diff = 0.0, mean_abs_ref = 0.0;
+    for (std::size_t i = 0; i < out_plain.size(); ++i) {
+        mean_abs_diff += std::fabs(out_plain[i] - out_offset[i]);
+        mean_abs_ref += std::fabs(out_plain[i]);
+    }
+    mean_abs_diff /= out_plain.size();
+    mean_abs_ref /= out_plain.size();
+    if (!(mean_abs_diff > 0.5 * mean_abs_ref)) {
+        std::cerr << "rmsnorm gain-convention: flags do not diverge (diff=" << mean_abs_diff
+                  << " ref=" << mean_abs_ref << ")\n";
+        ++failures;
+    }
+    return failures;
+}
+
 } // namespace
 
 int main() {
@@ -176,6 +226,7 @@ int main() {
             failures += run_case("rmsnorm QK scale/unaligned", {256, 4, 17}, offset, 2002U, scale,
                                  true, true);
         }
+    failures += run_gain_convention_case();
     std::cout << (failures ? "FAIL" : "OK") << " rmsnorm\n";
     return failures ? 1 : 0;
 }

@@ -19,6 +19,14 @@ namespace ninfer::ops {
  * with that result; output storage rounding belongs to the Op's numerical criterion, not the
  * oracle. Kernel reduction, staging, and accumulator precision are implementation choices. There
  * is no workspace or persistent state side effect.
+ *
+ * Representation contract (OPTION A: artifacts preserve source semantics, never shifted):
+ * norm tensors are stored verbatim from the source checkpoint, and the caller selects the
+ * matching gain convention explicitly via `unit_offset`. Qwen-family artifacts store ~0-centered
+ * weights and call with unit_offset=true (gain 1+w). Ternary Bonsai artifacts store ~1.0 plain
+ * gains and call with unit_offset=false (gain w, verified against the live model). Converting
+ * between conventions by silently rewriting tensor values is forbidden; the flag is the contract,
+ * pinned by the gain-convention test case.
  */
 void rmsnorm(const Tensor& x, const Tensor& weight, float eps, bool unit_offset, Tensor& out,
              cudaStream_t stream);
