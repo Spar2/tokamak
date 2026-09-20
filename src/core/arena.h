@@ -31,6 +31,10 @@ public:
     // Completes the upload before returning. Callers must first order any prior device
     // accesses to the destination range.
     void copy_from_host(const void* source, std::size_t count, std::size_t byte_offset = 0);
+    // Unlike copy_from_host, this does NOT settle any stream: the caller must
+    // synchronize the producing (op) stream before reading back results.
+    // Reading a live compute-stream buffer without that sync is the M5
+    // first-run-divergence bug class (host observes incomplete writes).
     void copy_to_host(void* destination, std::size_t count, std::size_t byte_offset = 0) const;
 
     // Raw access is intentional: Tensor and Weight are non-owning views.
