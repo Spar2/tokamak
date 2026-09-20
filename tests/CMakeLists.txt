@@ -317,6 +317,9 @@ ninfer_add_op_test(ninfer_bq2_chain_decode_test
 ninfer_add_op_test(ninfer_bq2_chain63_test
   SOURCES ops/test_bq2_chain63.cpp
   LIBRARIES ninfer_ops ninfer_artifact)
+ninfer_add_op_test(ninfer_bq2_chain_gen_test
+  SOURCES ops/test_bq2_chain_gen.cpp
+  LIBRARIES ninfer_ops ninfer_artifact)
 ninfer_add_op_test(ninfer_context_kv_materialize_test
   SOURCES ops/test_context_kv_materialize.cpp
   LIBRARIES ninfer_ops)
