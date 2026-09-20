@@ -216,6 +216,61 @@ int run_inverse_case(std::int32_t k, std::int32_t t, std::uint32_t seed) {
 
 } // namespace
 
+// GDN-V grouped permutation: exact index equality (no floating-point math).
+// Reference: head hh = r*H_qk+k moves to grouped slot k*rep+r, per token.
+int run_group_case(std::int32_t h_qk, std::int32_t h_v, std::int32_t d, std::int32_t t,
+                   std::uint32_t seed) {
+    const std::int32_t k = h_v * d;
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist(-2.0F, 2.0F);
+    std::vector<std::uint16_t> x_bits(static_cast<std::size_t>(k) * t);
+    for (auto& b : x_bits) { b = f32_to_bf16(dist(rng)); }
+    const std::int32_t rep = h_v / h_qk;
+    std::vector<std::uint16_t> ref(static_cast<std::size_t>(k) * t);
+    for (std::int32_t tok = 0; tok < t; ++tok) {
+        for (std::int32_t hh = 0; hh < h_v; ++hh) {
+            const std::int32_t nh = (hh % h_qk) * rep + hh / h_qk;
+            for (std::int32_t i = 0; i < d; ++i) {
+                ref[(static_cast<std::size_t>(tok) * k) + nh * d + i] =
+                    x_bits[(static_cast<std::size_t>(tok) * k) + hh * d + i];
+            }
+        }
+    }
+
+    void* d_x   = nullptr;
+    void* d_out = nullptr;
+    if (cudaMalloc(&d_x, x_bits.size() * 2) != cudaSuccess) { return 1; }
+    if (cudaMalloc(&d_out, x_bits.size() * 2) != cudaSuccess) { return 1; }
+    if (cudaMemcpy(d_x, x_bits.data(), x_bits.size() * 2, cudaMemcpyHostToDevice) !=
+        cudaSuccess) {
+        return 1;
+    }
+    Tensor x(d_x, DType::BF16, {k, t});
+    Tensor out(d_out, DType::BF16, {k, t});
+    try {
+        ops::t2_gdn_v_group(x, h_qk, h_v, d, out, nullptr);
+    } catch (const std::exception& error) {
+        std::cerr << "GDN-V-GROUP threw: " << error.what() << '\n';
+        return 1;
+    }
+    if (cudaDeviceSynchronize() != cudaSuccess) { return 1; }
+    std::vector<std::uint16_t> got(x_bits.size());
+    if (cudaMemcpy(got.data(), d_out, got.size() * 2, cudaMemcpyDeviceToHost) != cudaSuccess) {
+        return 1;
+    }
+    cudaFree(d_x);
+    cudaFree(d_out);
+
+    std::size_t mism = 0;
+    for (std::size_t i = 0; i < got.size(); ++i) {
+        if (got[i] != ref[i]) { ++mism; }
+    }
+    const bool ok = mism == 0;
+    std::printf("GDN-V-GROUP hqk=%d hv=%d d=%d t=%d: bit_mismatches=%zu %s\n", h_qk, h_v, d,
+                t, mism, ok ? "PASS" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 int main() {
     int failures = 0;
     failures += run_case(1024, 1, 11U);
@@ -224,6 +279,10 @@ int main() {
     failures += run_case(17408, 1, 14U);
     failures += run_inverse_case(5120, 1, 21U);
     failures += run_inverse_case(5120, 4, 22U);
+    failures += run_group_case(16, 48, 128, 1, 31U);
+    failures += run_group_case(16, 48, 128, 3, 32U);
+    failures += run_group_case(4, 12, 128, 2, 33U);
+    failures += run_group_case(16, 16, 128, 2, 34U);
     std::cout << (failures == 0 ? "OK" : "FAIL") << " T2_FWHT\n";
     return failures == 0 ? 0 : 1;
 }

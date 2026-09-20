@@ -138,4 +138,59 @@ std::size_t t2_fwht_workspace_capacity_bytes(std::int32_t k, std::int32_t min_to
     return 0;
 }
 
+namespace {
+
+__global__ void t2_gdn_v_group_kernel(const __nv_bfloat16* __restrict__ x,
+                                      __nv_bfloat16* __restrict__ out, std::int64_t k,
+                                      std::int64_t t, std::int32_t h_qk, std::int32_t rep,
+                                      std::int32_t d) {
+    const std::int64_t n = k * t;
+    for (std::int64_t idx = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         idx < n; idx += static_cast<std::int64_t>(gridDim.x) * blockDim.x) {
+        const std::int64_t pos = idx % k;
+        const std::int64_t tok = idx / k;
+        const std::int32_t hh  = static_cast<std::int32_t>(pos / d);
+        const std::int32_t i   = static_cast<std::int32_t>(pos % d);
+        // Original head hh = r*H_qk+k ([D,H_qk,rep] order) moves to grouped
+        // slot k*rep+r ([D,rep,H_qk] order), matching Prism's reshape +
+        // permute(0,2,1) before signs+FWHT.
+        const std::int32_t r    = hh / h_qk;
+        const std::int32_t kk   = hh % h_qk;
+        const std::int64_t npos = (static_cast<std::int64_t>(kk) * rep + r) * d + i;
+        out[tok * k + npos]     = x[idx];
+    }
+}
+
+} // namespace
+
+void t2_gdn_v_group(const Tensor& x, std::int32_t qk_heads, std::int32_t value_heads,
+                    std::int32_t head_dim, Tensor& out, cudaStream_t stream) {
+    if (x.dtype != DType::BF16 || out.dtype != DType::BF16) {
+        throw std::invalid_argument("t2_gdn_v_group: x/out must be BF16");
+    }
+    if (x.ne[0] != out.ne[0] || x.ne[1] != out.ne[1] || x.ne[2] != 1 || x.ne[3] != 1 ||
+        out.ne[2] != 1 || out.ne[3] != 1) {
+        throw std::invalid_argument("t2_gdn_v_group: shape mismatch, expected [K,T]");
+    }
+    if (qk_heads <= 0 || value_heads <= 0 || head_dim <= 0 ||
+        (value_heads % qk_heads) != 0) {
+        throw std::invalid_argument("t2_gdn_v_group: value heads must be a positive multiple of qk heads");
+    }
+    const std::int32_t rep = value_heads / qk_heads;
+    if (x.ne[0] != static_cast<std::int64_t>(value_heads) * head_dim || x.ne[1] <= 0) {
+        throw std::invalid_argument("t2_gdn_v_group: K must equal value_heads*head_dim with T>0");
+    }
+    if (!x.is_contiguous() || !out.is_contiguous()) {
+        throw std::invalid_argument("t2_gdn_v_group: x/out must be contiguous");
+    }
+    constexpr unsigned kThreads = 256u;
+    const std::int64_t n        = x.ne[0] * x.ne[1];
+    const unsigned grid =
+        static_cast<unsigned>(std::min<std::int64_t>((n + kThreads - 1) / kThreads, 65535));
+    t2_gdn_v_group_kernel<<<grid, kThreads, 0u, stream>>>(
+        static_cast<const __nv_bfloat16*>(x.data), static_cast<__nv_bfloat16*>(out.data),
+        x.ne[0], x.ne[1], qk_heads, rep, head_dim);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 } // namespace ninfer::ops

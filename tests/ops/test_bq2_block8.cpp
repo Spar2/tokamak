@@ -353,7 +353,7 @@ int main() {
             DeviceBuffer d_g(48 * T * 4), d_b(48 * T * 4);
             DeviceBuffer d_qc(2048 * T * 2), d_kc(2048 * T * 2), d_vc(6144 * T * 2);
             DeviceBuffer d_csi(10240 * 3 * 2), d_cso(10240 * 3 * 2);
-            DeviceBuffer d_o(6144 * T * 2), d_on(6144 * T * 2);
+            DeviceBuffer d_o(6144 * T * 2), d_on(6144 * T * 2), d_ong(6144 * T * 2);
             DeviceBuffer d_ao(5120 * T * 2), d_x1(5120 * T * 2), d_mh(5120 * T * 2);
             DeviceBuffer d_gv(17408 * T * 2), d_uv(17408 * T * 2), d_act(17408 * T * 2);
             DeviceBuffer d_d(5120 * T * 2), d_lout(5120 * T * 2);
@@ -389,7 +389,6 @@ int main() {
             t_oth.record_stop();
             device.synchronize();
             ms_oth_total += t_oth.elapsed_ms();
-            // 2. FWHT + T2 linears (qkv, z).
             t_fw.start();
             {
                 const Tensor h(d_h.p, DType::BF16, {5120, T});
@@ -551,9 +550,18 @@ int main() {
             t_oth.record_stop();
             device.synchronize();
             ms_oth_total += t_oth.elapsed_ms();
+            // Prism-true GDN-V grouped ssm_out rotation, executed on device:
+            // [128,16,3] -> [128,3,16] head regroup before signs + FWHT.
+            // d_on keeps ungrouped `on` for the gated_out check; grouped
+            // lands in d_ong for ssm_out.
+            {
+                const Tensor ung(d_on.p, DType::BF16, {6144, T});
+                Tensor grouped(d_ong.p, DType::BF16, {6144, T});
+                ops::t2_gdn_v_group(ung, 16, 48, 128, grouped, stream);
+            }
             t_fw.start();
             {
-                const Tensor on(d_on.p, DType::BF16, {6144, T});
+                const Tensor on(d_ong.p, DType::BF16, {6144, T});
                 Tensor onr(d_hr.p, DType::BF16, {6144, T});
                 ops::t2_fwht_sign(on, static_cast<const float*>(d_s6144.p), onr, stream);
             }
@@ -683,6 +691,7 @@ int main() {
         // recurrence at depth. Inputs are the oracle's x0 vectors.
         struct StabOut {
             std::vector<float> h, qkv, z, g, b, conv, gdn, lout;
+            std::vector<float> ao, x1, mh, ffn;
         };
         const int stab_ts[] = {8, 16, 32, 128};
         for (int si = 0; si < 4; ++si) {
@@ -694,7 +703,7 @@ int main() {
                 DeviceBuffer d_g(48 * T * 4), d_b(48 * T * 4);
                 DeviceBuffer d_qc(2048 * T * 2), d_kc(2048 * T * 2), d_vc(6144 * T * 2);
                 DeviceBuffer d_csi(10240 * 3 * 2), d_cso(10240 * 3 * 2);
-                DeviceBuffer d_o(6144 * T * 2), d_on(6144 * T * 2);
+            DeviceBuffer d_o(6144 * T * 2), d_on(6144 * T * 2), d_ong(6144 * T * 2);
                 DeviceBuffer d_ao(5120 * T * 2), d_x1(5120 * T * 2), d_mh(5120 * T * 2);
                 DeviceBuffer d_gv(17408 * T * 2), d_uv(17408 * T * 2), d_act(17408 * T * 2);
                 DeviceBuffer d_d(5120 * T * 2), d_lout(5120 * T * 2);
@@ -782,7 +791,13 @@ int main() {
                     ops::gated_rmsnorm(o, w, z, kEps, on, stream);
                 }
                 {
-                    const Tensor on(d_on.p, DType::BF16, {6144, T});
+                    // Device-side GDN-V grouped ssm_out rotation (see gate loop).
+                    const Tensor ung(d_on.p, DType::BF16, {6144, T});
+                    Tensor grouped(d_ong.p, DType::BF16, {6144, T});
+                    ops::t2_gdn_v_group(ung, 16, 48, 128, grouped, stream);
+                }
+                {
+                    const Tensor on(d_ong.p, DType::BF16, {6144, T});
                     Tensor onr(d_hr.p, DType::BF16, {6144, T});
                     ops::t2_fwht_sign(on, static_cast<const float*>(d_s6144.p), onr, stream);
                 }
@@ -845,6 +860,10 @@ int main() {
                     out.qkv  = d2h_bf16(d_qkv.p, 10240 * T);
                     out.z    = d2h_bf16(d_z.p, 6144 * T);
                     out.gdn  = d2h_bf16(d_o.p, 6144 * T);
+                    out.ao   = d2h_bf16(d_ao.p, 5120 * T);
+                    out.x1   = d2h_bf16(d_x1.p, 5120 * T);
+                    out.mh   = d2h_bf16(d_mh.p, 5120 * T);
+                    out.ffn  = d2h_bf16(d_d.p, 5120 * T);
                     const std::vector<float> c0 = d2h_bf16(d_qc.p, 2048 * T);
                     const std::vector<float> c1 = d2h_bf16(d_kc.p, 2048 * T);
                     const std::vector<float> c2 = d2h_bf16(d_vc.p, 6144 * T);
@@ -890,6 +909,30 @@ int main() {
                             as_column_major(load_ref(vdir, T, "gdn_out", 6144 * T), 6144, T)
                                 .data(),
                             6144 * T, "s_gdn", kSmall);
+            // Post-GDN stab stages use a wider maxabs gate: ssm_out output
+            // row 3994 is a genuine model outlier channel (PQ2_0 group
+            // scales ~0.26, 10x the rest; oracle attn_out hits 2.7/2.8/6.0
+            // there at T=16/32/128 vs <=1.1 elsewhere), so device-BF16 vs
+            // FP64-oracle GEMM noise concentrates there (~0.5-1.5% of the
+            // row magnitude) and tails grow with T (more draws). rmse+cos
+            // carry the correctness verdict.
+            const Gate kStab = {5e-3, 0.9999, 8e-2};
+            ok &= check_vec(got.ao.data(),
+                            as_column_major(load_ref(vdir, T, "attn_out", 5120 * T), 5120, T)
+                                .data(),
+                            5120 * T, "s_ao", kStab);
+            ok &= check_vec(got.x1.data(),
+                            as_column_major(load_ref(vdir, T, "attn_residual", 5120 * T), 5120, T)
+                                .data(),
+                            5120 * T, "s_x1", kStab);
+            ok &= check_vec(got.mh.data(),
+                            as_column_major(load_ref(vdir, T, "attn_post_norm", 5120 * T), 5120, T)
+                                .data(),
+                            5120 * T, "s_mh", kStab);
+            ok &= check_vec(got.ffn.data(),
+                            as_column_major(load_ref(vdir, T, "ffn_out", 5120 * T), 5120, T)
+                                .data(),
+                            5120 * T, "s_ffn", kStab);
             ok &= check_vec(got.lout.data(),
                             as_column_major(load_ref(vdir, T, "l_out", 5120 * T), 5120, T).data(),
                             5120 * T, "s_lout", kFinal);
