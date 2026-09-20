@@ -415,8 +415,10 @@ struct RecordAccess {
 
     __device__ __forceinline__ void store_key(const RecurrentCoordinates& coord, std::int32_t token,
                                               const RawQkLane& raw) const {
+        // Record one qk slot per qk head: with the h_v % H_qk map, qk head j
+        // is shared by value heads {j, j+H_qk, ...}, so head j itself records it.
         if (coord.state_tile == 0 && coord.warp == 0 &&
-            static_cast<int>(coord.value_head) % heads.group_size() == 0) {
+            coord.value_head == coord.qk_head) {
             __nv_bfloat16* destination =
                 key_record + (column(coord, token) * heads.H_qk + coord.qk_head) * kStateDim;
             store_vec(destination + coord.dqk_base, raw.bits);
@@ -475,8 +477,7 @@ struct FoldAccess {
         const int warp                 = threadIdx.y;
         const std::int32_t state_tile  = layer_tile & 7;
         const std::uint32_t value_head = static_cast<std::uint32_t>(blockIdx.x);
-        constexpr std::uint32_t kGroup = Geometry::kValueHeads / Geometry::kQkHeads;
-        const std::uint32_t qk_head    = value_head / kGroup;
+        const std::uint32_t qk_head    = value_head % Geometry::kQkHeads;
         const std::uint32_t dv_base =
             static_cast<std::uint32_t>(state_tile * kBlockDv + warp * kDvPerWarp);
         return {lane,
