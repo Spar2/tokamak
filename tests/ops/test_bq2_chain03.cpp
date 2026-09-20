@@ -93,7 +93,8 @@ int main() {
                     const Tensor x(d_cur.p, DType::BF16, {5120, T});
                     Tensor out(d_nxt.p, DType::BF16, {5120, T});
                     run_full_block(model, il, x, out, state.kv_view(il), positions,
-                                   rope_positions, table_rows, stream);
+                                   rope_positions, table_rows, static_cast<std::uint32_t>(T),
+                                   stream);
                 } else {
                     const Tensor x(d_cur.p, DType::BF16, {5120, T});
                     Tensor out(d_nxt.p, DType::BF16, {5120, T});

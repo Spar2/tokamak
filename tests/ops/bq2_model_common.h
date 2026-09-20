@@ -653,10 +653,12 @@ inline void run_gdn_block(Bq2Model& m, int il, const Tensor& x, Tensor& out, Ten
 // Production full-attention block (layer il): x [5120,T] -> out [5120,T].
 // KV cache (per-layer, persistent, append form), positions I32 [T] (absolute),
 // rope_positions I32 [T,3] (t,t,t with absolute t), table_rows I32 [1].
+// max_visible_keys is the host promise for max(positions)+1 over the call:
+// T for a 0..T-1 prefill, p+1 for a decode at absolute position p.
 inline void run_full_block(Bq2Model& m, int il, const Tensor& x, Tensor& out,
                            PagedKVBatchLayerView cache, const Tensor& positions,
                            const Tensor& rope_positions, const Tensor& table_rows,
-                           cudaStream_t s) {
+                           std::uint32_t max_visible_keys, cudaStream_t s) {
     const FullLayerW& w = m.full[il];
     const int T         = x.ne[1];
     DeviceBuffer d_h(5120 * T * 2), d_hr(17408 * T * 2);
@@ -733,8 +735,7 @@ inline void run_full_block(Bq2Model& m, int il, const Tensor& x, Tensor& out,
         const Tensor rows(table_rows);
         Tensor out3(d_attn.p, DType::BF16, {256, 24, T});
         const Tensor empty;
-        const ops::CausalAttentionExecutionEnvelope env{static_cast<std::uint32_t>(T),
-                                                       static_cast<std::uint32_t>(T)};
+        const ops::CausalAttentionExecutionEnvelope env{max_visible_keys, max_visible_keys};
         DeviceArena ws_attn(std::max<std::size_t>(
             ops::causal_softmax_attention_workspace_capacity_bytes(
                 ops::AttentionHeadGeometry{256, 24, 4}, KvCacheStorage::BFloat16, env, 1, T, T),
