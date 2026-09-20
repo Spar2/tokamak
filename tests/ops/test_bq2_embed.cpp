@@ -27,54 +27,7 @@ namespace {
 using namespace ninfer;
 using namespace bq2full;
 
-float f16_to_f32(std::uint16_t h) {
-    std::uint32_t sign = (static_cast<std::uint32_t>(h) & 0x8000u) << 16;
-    std::uint32_t exp  = (static_cast<std::uint32_t>(h) >> 10) & 0x1fu;
-    std::uint32_t mant = static_cast<std::uint32_t>(h) & 0x03ffu;
-    std::uint32_t w;
-    if (exp == 0) {
-        if (mant == 0) { w = sign; } else {
-            int e = -14;
-            while ((mant & 0x0400u) == 0) { mant <<= 1; --e; }
-            mant &= 0x03ffu;
-            w = sign | ((e + 127) << 23) | (mant << 13);
-        }
-    } else if (exp == 31) {
-        w = sign | 0x7f800000u | (mant << 13);
-    } else {
-        w = sign | ((exp - 15 + 127) << 23) | (mant << 13);
-    }
-    float f = 0.0F;
-    std::memcpy(&f, &w, 4);
-    return f;
-}
-
-// Decode T2 rows [row_begin, row_end) of an [N,K] NInfer row-split payload
-// to FP64. Layout: code plane (N*G*32B row-major) + pad to 256B + scale
-// plane (N*G*2B F16LE). No high plane for T2.
-std::vector<double> t2_decode_rows(const std::uint8_t* payload, int N, int row_begin, int row_end,
-                                   int K) {
-    const int G                 = K / 128;
-    const std::size_t code_size = static_cast<std::size_t>(N) * G * 32;
-    const std::size_t scale_off = (code_size + 255) / 256 * 256;
-    std::vector<double> out(static_cast<std::size_t>(row_end - row_begin) * K);
-    for (int n = row_begin; n < row_end; ++n) {
-        for (int g = 0; g < G; ++g) {
-            const std::size_t gi = static_cast<std::size_t>(n) * G + g;
-            const std::uint8_t* codes =
-                payload + gi * 32;
-            std::uint16_t sh = static_cast<std::uint16_t>(
-                payload[scale_off + gi * 2] | (payload[scale_off + gi * 2 + 1] << 8));
-            const double sc = f16_to_f32(sh);
-            for (int j = 0; j < 128; ++j) {
-                const int code = (codes[j / 4] >> ((j % 4) * 2)) & 3;
-                out[(static_cast<std::size_t>(n - row_begin)) * K + g * 128 + j] =
-                    (code - 1) * sc;
-            }
-        }
-    }
-    return out;
-}
+// f16_to_f32 + t2_decode_rows come from bq2_model_common.h.
 
 } // namespace
 

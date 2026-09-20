@@ -21,6 +21,7 @@
 #include "core/device.h"
 #include "core/paged_kv_cache.h"
 #include "core/tensor.h"
+#include "ninfer/ops/causal_conv1d_silu.h"
 #include "ninfer/ops/gated_delta_net.h"
 #include "ninfer/ops/gated_rmsnorm.h"
 #include "ninfer/ops/gdn_gating_proj.h"
@@ -125,6 +126,58 @@ inline void upload_bf16(const float* host, void* device, std::size_t n) {
 inline void upload_i32(const std::int32_t* host, void* device, std::size_t n) {
     CUDA_CHECK(cudaMemcpy(device, host, n * 4, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaStreamSynchronize(nullptr));
+}
+
+inline float f16_to_f32(std::uint16_t h) {
+    std::uint32_t sign = (static_cast<std::uint32_t>(h) & 0x8000u) << 16;
+    std::uint32_t exp  = (static_cast<std::uint32_t>(h) >> 10) & 0x1fu;
+    std::uint32_t mant = static_cast<std::uint32_t>(h) & 0x03ffu;
+    std::uint32_t w;
+    if (exp == 0) {
+        if (mant == 0) {
+            w = sign;
+        } else {
+            int e = -14;
+            while ((mant & 0x0400u) == 0) {
+                mant <<= 1;
+                --e;
+            }
+            mant &= 0x03ffu;
+            w = sign | ((e + 127) << 23) | (mant << 13);
+        }
+    } else if (exp == 31) {
+        w = sign | 0x7f800000u | (mant << 13);
+    } else {
+        w = sign | ((exp - 15 + 127) << 23) | (mant << 13);
+    }
+    float f = 0.0F;
+    std::memcpy(&f, &w, 4);
+    return f;
+}
+
+// Decode T2 rows [row_begin, row_end) of an [N,K] NInfer row-split payload to
+// FP64 (host test staging, exact). Layout: code plane + 256B pad + F16 scales.
+inline std::vector<double> t2_decode_rows(const std::uint8_t* payload, int N, int row_begin,
+                                          int row_end, int K) {
+    const int G                 = K / 128;
+    const std::size_t code_size = static_cast<std::size_t>(N) * G * 32;
+    const std::size_t scale_off = (code_size + 255) / 256 * 256;
+    std::vector<double> out(static_cast<std::size_t>(row_end - row_begin) * K);
+    for (int n = row_begin; n < row_end; ++n) {
+        for (int g = 0; g < G; ++g) {
+            const std::size_t gi    = static_cast<std::size_t>(n) * G + g;
+            const std::uint8_t* codes = payload + gi * 32;
+            std::uint16_t sh = static_cast<std::uint16_t>(payload[scale_off + gi * 2] |
+                                                          (payload[scale_off + gi * 2 + 1] << 8));
+            const double sc = f16_to_f32(sh);
+            for (int j = 0; j < 128; ++j) {
+                const int code = (codes[j / 4] >> ((j % 4) * 2)) & 3;
+                out[(static_cast<std::size_t>(n - row_begin)) * K + g * 128 + j] =
+                    (code - 1) * sc;
+            }
+        }
+    }
+    return out;
 }
 
 inline std::vector<std::uint8_t> load_file(const std::string& path) {
@@ -376,13 +429,13 @@ struct Bq2Model {
 
     // Per-layer conv weight views (tap-major staging owned here).
     std::vector<DeviceBuffer> gdn_conv_bufs_;
-    Weight conv_weight_of(int il) {
+    void* conv_weight_of(int il) {
         // gdn_conv_bufs_[k] aligns with the k-th GDN layer in index order.
         int k = 0;
         for (int i = 0; i < il; ++i) {
             if (!is_full_layer(i)) { ++k; }
         }
-        return bf16_ctrl_weight(gdn_conv_bufs_[k].p, 10240, 4);
+        return gdn_conv_bufs_[k].p;
     }
 
     const float* signs_for(int width) const {
@@ -459,5 +512,323 @@ struct Bq2SeqState {
         return v;
     }
 };
+
+// Production GDN block (layer il): x [5120,T] -> out [5120,T] (disjoint).
+// conv_state BF16 [10240,3] and ssm_state FP32 [128,128,48] are persistent
+// (in-place update); zero them at session reset, never per call.
+inline void run_gdn_block(Bq2Model& m, int il, const Tensor& x, Tensor& out, Tensor& conv_state,
+                          Tensor& ssm_state, cudaStream_t s) {
+    const GdnLayerW& w = m.gdn[il];
+    const int T        = x.ne[1];
+    DeviceBuffer d_h(5120 * T * 2), d_hr(17408 * T * 2);
+    DeviceBuffer d_qkv(10240 * T * 2), d_z(6144 * T * 2);
+    DeviceBuffer d_g(48 * T * 4), d_b(48 * T * 4);
+    DeviceBuffer d_qc(2048 * T * 2), d_kc(2048 * T * 2), d_vc(6144 * T * 2);
+    DeviceBuffer d_o(6144 * T * 2), d_on(6144 * T * 2), d_ong(6144 * T * 2);
+    DeviceBuffer d_ao(5120 * T * 2), d_x1(5120 * T * 2), d_mh(5120 * T * 2);
+    DeviceBuffer d_gv(17408 * T * 2), d_uv(17408 * T * 2), d_act(17408 * T * 2);
+    DeviceBuffer d_d(5120 * T * 2);
+    {
+        Tensor h(d_h.p, DType::BF16, {5120, T});
+        ops::rmsnorm(x, w.an, kEps, false, h, s);
+    }
+    {
+        const Tensor h(d_h.p, DType::BF16, {5120, T});
+        Tensor hr(d_hr.p, DType::BF16, {5120, T});
+        ops::t2_fwht_sign(h, m.signs_for(5120), hr, s);
+    }
+    {
+        const Tensor hr(d_hr.p, DType::BF16, {5120, T});
+        Tensor qkv(d_qkv.p, DType::BF16, {10240, T});
+        Tensor z(d_z.p, DType::BF16, {6144, T});
+        ops::linear(hr, w.qkv, qkv, s);
+        ops::linear(hr, w.gate, z, s);
+    }
+    {
+        DeviceArena ws_gate(std::max<std::size_t>(
+            ops::gdn_gating_proj_workspace_capacity_bytes(48, 5120, T, T), 256));
+        const Tensor h(d_h.p, DType::BF16, {5120, T});
+        Tensor g(d_g.p, DType::FP32, {48, T});
+        Tensor b(d_b.p, DType::FP32, {48, T});
+        ops::gdn_gating_proj(h, w.alpha, w.beta, w.sa, w.sdt,
+                             ops::GdnGateFormula::RawMultiply, ws_gate, g, b,
+                             m.device.execution_view());
+    }
+    {
+        const Tensor qkv(d_qkv.p, DType::BF16, {10240, T});
+        const Tensor wcw(m.conv_weight_of(il), DType::BF16, {10240, 4});
+        Tensor o0(d_qc.p, DType::BF16, {2048, T});
+        Tensor o1(d_kc.p, DType::BF16, {2048, T});
+        Tensor o2(d_vc.p, DType::BF16, {6144, T});
+        // In-place state update: persistent conv_state is both the initial
+        // window and the receiver of the trailing window.
+        ops::causal_conv1d_silu_split(qkv, wcw, conv_state, conv_state, o0, o1, o2, s);
+    }
+    {
+        DeviceArena ws_gdn(std::max<std::size_t>(
+            ops::gated_delta_net_workspace_capacity_bytes(16, 48, true, T, T), 256));
+        const Tensor q(d_qc.p, DType::BF16, {128, 16, T});
+        const Tensor k(d_kc.p, DType::BF16, {128, 16, T});
+        const Tensor v(d_vc.p, DType::BF16, {128, 48, T});
+        const Tensor g(d_g.p, DType::FP32, {48, T});
+        const Tensor beta(d_b.p, DType::FP32, {48, T});
+        Tensor o(d_o.p, DType::BF16, {128, 48, T});
+        // In-place state update via the same-storage overload.
+        ops::gated_delta_net(q, k, v, g, beta, kGdnScale, true, ws_gdn, ssm_state, o, s);
+    }
+    {
+        const Tensor o(d_o.p, DType::BF16, {128, 48, T});
+        const Tensor z(d_z.p, DType::BF16, {128, 48, T});
+        Tensor on(d_on.p, DType::BF16, {128, 48, T});
+        const Tensor wsn(w.sn.data, DType::BF16, {128});
+        ops::gated_rmsnorm(o, wsn, z, kEps, on, s);
+    }
+    {
+        // GDN-V grouped ssm_out rotation on device ([128,16,3]->[128,3,16]);
+        // required by folded ssm_out weights (Prism hadamard_gdn_v_grouped).
+        const Tensor ung(d_on.p, DType::BF16, {6144, T});
+        Tensor grouped(d_ong.p, DType::BF16, {6144, T});
+        ops::t2_gdn_v_group(ung, 16, 48, 128, grouped, s);
+    }
+    {
+        const Tensor on(d_ong.p, DType::BF16, {6144, T});
+        Tensor onr(d_hr.p, DType::BF16, {6144, T});
+        ops::t2_fwht_sign(on, m.signs_for(6144), onr, s);
+    }
+    {
+        const Tensor onr(d_hr.p, DType::BF16, {6144, T});
+        Tensor ao(d_ao.p, DType::BF16, {5120, T});
+        ops::linear(onr, w.so, ao, s);
+    }
+    {
+        CUDA_CHECK(
+            cudaMemcpyAsync(d_x1.p, x.data, 5120 * T * 2, cudaMemcpyDeviceToDevice, s));
+        const Tensor ao(d_ao.p, DType::BF16, {5120, T});
+        Tensor x1(d_x1.p, DType::BF16, {5120, T});
+        ops::residual_add(ao, x1, s);
+    }
+    {
+        const Tensor x1(d_x1.p, DType::BF16, {5120, T});
+        const Tensor wpost(w.pn.data, DType::BF16, {5120});
+        Tensor mh(d_mh.p, DType::BF16, {5120, T});
+        ops::rmsnorm(x1, wpost, kEps, false, mh, s);
+    }
+    {
+        const Tensor mh(d_mh.p, DType::BF16, {5120, T});
+        Tensor mhr(d_hr.p, DType::BF16, {5120, T});
+        ops::t2_fwht_sign(mh, m.signs_for(5120), mhr, s);
+    }
+    {
+        const Tensor mhr(d_hr.p, DType::BF16, {5120, T});
+        Tensor gv(d_gv.p, DType::BF16, {17408, T});
+        Tensor uv(d_uv.p, DType::BF16, {17408, T});
+        ops::linear(mhr, w.fg, gv, s);
+        ops::linear(mhr, w.fu, uv, s);
+    }
+    {
+        const Tensor gv(d_gv.p, DType::BF16, {17408, T});
+        const Tensor uv(d_uv.p, DType::BF16, {17408, T});
+        Tensor act(d_act.p, DType::BF16, {17408, T});
+        ops::silu_mul(gv, uv, act, s);
+    }
+    {
+        const Tensor act(d_act.p, DType::BF16, {17408, T});
+        Tensor actr(d_hr.p, DType::BF16, {17408, T});
+        ops::t2_fwht_sign(act, m.signs_for(17408), actr, s);
+    }
+    {
+        const Tensor actr(d_hr.p, DType::BF16, {17408, T});
+        Tensor d(d_d.p, DType::BF16, {5120, T});
+        ops::linear(actr, w.fd, d, s);
+    }
+    {
+        CUDA_CHECK(
+            cudaMemcpyAsync(out.data, d_x1.p, 5120 * T * 2, cudaMemcpyDeviceToDevice, s));
+        const Tensor d(d_d.p, DType::BF16, {5120, T});
+        Tensor lo(out.data, DType::BF16, {5120, T});
+        ops::residual_add(d, lo, s);
+    }
+}
+
+// Production full-attention block (layer il): x [5120,T] -> out [5120,T].
+// KV cache (per-layer, persistent, append form), positions I32 [T] (absolute),
+// rope_positions I32 [T,3] (t,t,t with absolute t), table_rows I32 [1].
+inline void run_full_block(Bq2Model& m, int il, const Tensor& x, Tensor& out,
+                           PagedKVBatchLayerView cache, const Tensor& positions,
+                           const Tensor& rope_positions, const Tensor& table_rows,
+                           cudaStream_t s) {
+    const FullLayerW& w = m.full[il];
+    const int T         = x.ne[1];
+    DeviceBuffer d_h(5120 * T * 2), d_hr(17408 * T * 2);
+    DeviceBuffer d_qfull(12288 * T * 2), d_k(1024 * T * 2), d_v(1024 * T * 2);
+    DeviceBuffer d_q(6144 * T * 2), d_gate(6144 * T * 2);
+    DeviceBuffer d_qn(6144 * T * 2), d_kn(1024 * T * 2);
+    DeviceBuffer d_attn(6144 * T * 2);
+    DeviceBuffer d_ao(5120 * T * 2), d_x1(5120 * T * 2), d_mh(5120 * T * 2);
+    DeviceBuffer d_gv(17408 * T * 2), d_uv(17408 * T * 2), d_act(17408 * T * 2);
+    DeviceBuffer d_d(5120 * T * 2);
+    {
+        Tensor h(d_h.p, DType::BF16, {5120, T});
+        ops::rmsnorm(x, w.an, kEps, false, h, s);
+    }
+    {
+        const Tensor h(d_h.p, DType::BF16, {5120, T});
+        Tensor hr(d_hr.p, DType::BF16, {5120, T});
+        ops::t2_fwht_sign(h, m.signs_for(5120), hr, s);
+    }
+    {
+        const Tensor hr(d_hr.p, DType::BF16, {5120, T});
+        Tensor qf(d_qfull.p, DType::BF16, {12288, T});
+        Tensor kf(d_k.p, DType::BF16, {1024, T});
+        Tensor vf(d_v.p, DType::BF16, {1024, T});
+        ops::linear(hr, w.q, qf, s);
+        ops::linear(hr, w.k, kf, s);
+        ops::linear(hr, w.v, vf, s);
+    }
+    // Q/gate de-interleave: host bit-exact BF16 repack (test staging; Q rows
+    // are per-head strided). K/V buffers are already head-major.
+    m.device.synchronize();
+    {
+        std::vector<std::uint16_t> qf_bits(12288 * T);
+        CUDA_CHECK(
+            cudaMemcpy(qf_bits.data(), d_qfull.p, qf_bits.size() * 2, cudaMemcpyDeviceToHost));
+        std::vector<std::uint16_t> q_bits(6144 * T), gate_bits(6144 * T);
+        for (int t = 0; t < T; ++t) {
+            for (int hh = 0; hh < 24; ++hh) {
+                for (int d = 0; d < 256; ++d) {
+                    q_bits[static_cast<std::size_t>(t) * 6144 + hh * 256 + d] =
+                        qf_bits[static_cast<std::size_t>(t) * 12288 + hh * 512 + d];
+                    gate_bits[static_cast<std::size_t>(t) * 6144 + hh * 256 + d] =
+                        qf_bits[static_cast<std::size_t>(t) * 12288 + hh * 512 + 256 + d];
+                }
+            }
+        }
+        CUDA_CHECK(
+            cudaMemcpy(d_q.p, q_bits.data(), q_bits.size() * 2, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_gate.p, gate_bits.data(), gate_bits.size() * 2,
+                              cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaStreamSynchronize(nullptr));
+    }
+    {
+        const Tensor q(d_q.p, DType::BF16, {256, 24, T});
+        const Tensor wq(w.qn.data, DType::BF16, {256});
+        Tensor qn(d_qn.p, DType::BF16, {256, 24, T});
+        ops::rmsnorm(q, wq, kEps, false, qn, s);
+    }
+    {
+        const Tensor k(d_k.p, DType::BF16, {256, 4, T});
+        const Tensor wk(w.kn.data, DType::BF16, {256});
+        Tensor kn(d_kn.p, DType::BF16, {256, 4, T});
+        ops::rmsnorm(k, wk, kEps, false, kn, s);
+    }
+    {
+        Tensor q(d_qn.p, DType::BF16, {256, 24, T});
+        Tensor k(d_kn.p, DType::BF16, {256, 4, T});
+        ops::rope(rope_positions, kRotaryDim, kRopeTheta, q, k, s);
+    }
+    {
+        const Tensor q(d_qn.p, DType::BF16, {256, 24, T});
+        const Tensor k(d_kn.p, DType::BF16, {256, 4, T});
+        const Tensor v(d_v.p, DType::BF16, {256, 4, T});
+        const Tensor rows(table_rows);
+        Tensor out3(d_attn.p, DType::BF16, {256, 24, T});
+        const Tensor empty;
+        const ops::CausalAttentionExecutionEnvelope env{static_cast<std::uint32_t>(T),
+                                                       static_cast<std::uint32_t>(T)};
+        DeviceArena ws_attn(std::max<std::size_t>(
+            ops::causal_softmax_attention_workspace_capacity_bytes(
+                ops::AttentionHeadGeometry{256, 24, 4}, KvCacheStorage::BFloat16, env, 1, T, T),
+            256));
+        ops::causal_softmax_attention(q, k, v, positions, empty, rows,
+                                      ops::AttentionHeadGeometry{256, 24, 4}, kAttnScale, cache,
+                                      env, ws_attn, out3, s);
+    }
+    {
+        const Tensor gate(d_gate.p, DType::BF16, {6144, T});
+        Tensor ax(d_attn.p, DType::BF16, {6144, T});
+        ops::sigmoid_mul(gate, ax, s);
+    }
+    {
+        const Tensor ax(d_attn.p, DType::BF16, {6144, T});
+        Tensor axr(d_hr.p, DType::BF16, {6144, T});
+        ops::t2_fwht_sign(ax, m.signs_for(6144), axr, s);
+    }
+    {
+        const Tensor axr(d_hr.p, DType::BF16, {6144, T});
+        Tensor ao(d_ao.p, DType::BF16, {5120, T});
+        ops::linear(axr, w.wo, ao, s);
+    }
+    {
+        CUDA_CHECK(
+            cudaMemcpyAsync(d_x1.p, x.data, 5120 * T * 2, cudaMemcpyDeviceToDevice, s));
+        const Tensor ao(d_ao.p, DType::BF16, {5120, T});
+        Tensor x1(d_x1.p, DType::BF16, {5120, T});
+        ops::residual_add(ao, x1, s);
+    }
+    {
+        const Tensor x1(d_x1.p, DType::BF16, {5120, T});
+        const Tensor wpost(w.pn.data, DType::BF16, {5120});
+        Tensor mh(d_mh.p, DType::BF16, {5120, T});
+        ops::rmsnorm(x1, wpost, kEps, false, mh, s);
+    }
+    {
+        const Tensor mh(d_mh.p, DType::BF16, {5120, T});
+        Tensor mhr(d_hr.p, DType::BF16, {5120, T});
+        ops::t2_fwht_sign(mh, m.signs_for(5120), mhr, s);
+    }
+    {
+        const Tensor mhr(d_hr.p, DType::BF16, {5120, T});
+        Tensor gv(d_gv.p, DType::BF16, {17408, T});
+        Tensor uv(d_uv.p, DType::BF16, {17408, T});
+        ops::linear(mhr, w.fg, gv, s);
+        ops::linear(mhr, w.fu, uv, s);
+    }
+    {
+        const Tensor gv(d_gv.p, DType::BF16, {17408, T});
+        const Tensor uv(d_uv.p, DType::BF16, {17408, T});
+        Tensor act(d_act.p, DType::BF16, {17408, T});
+        ops::silu_mul(gv, uv, act, s);
+    }
+    {
+        const Tensor act(d_act.p, DType::BF16, {17408, T});
+        Tensor actr(d_hr.p, DType::BF16, {17408, T});
+        ops::t2_fwht_sign(act, m.signs_for(17408), actr, s);
+    }
+    {
+        const Tensor actr(d_hr.p, DType::BF16, {17408, T});
+        Tensor d(d_d.p, DType::BF16, {5120, T});
+        ops::linear(actr, w.fd, d, s);
+    }
+    {
+        CUDA_CHECK(
+            cudaMemcpyAsync(out.data, d_x1.p, 5120 * T * 2, cudaMemcpyDeviceToDevice, s));
+        const Tensor d(d_d.p, DType::BF16, {5120, T});
+        Tensor lo(out.data, DType::BF16, {5120, T});
+        ops::residual_add(d, lo, s);
+    }
+}
+
+// Embedding lookup: token ids -> PQ2 row gather (host exact FP64 decode) ->
+// BF16 upload -> production t2_fwht_sign_inverse (H-then-signs). out is
+// [5120,T] ne0-fastest (column t at t*5120).
+inline void embed_lookup(Bq2Model& m, const std::int32_t* ids, int T, void* out_bf16,
+                         cudaStream_t s) {
+    const artifact::PayloadSpan span =
+        m.reader.payload("text/token_embedding");
+    const std::uint8_t* epayload = reinterpret_cast<const std::uint8_t*>(span.data.data());
+    std::vector<float> latent(5120 * T);
+    for (int t = 0; t < T; ++t) {
+        const std::vector<double> row = t2_decode_rows(epayload, kVocabPhys, ids[t], ids[t] + 1,
+                                                       5120);
+        for (int d = 0; d < 5120; ++d) {
+            latent[static_cast<std::size_t>(t) * 5120 + d] = static_cast<float>(row[d]);
+        }
+    }
+    DeviceBuffer d_lat(5120 * T * 2);
+    upload_bf16(latent.data(), d_lat.p, 5120 * T);
+    const Tensor x(d_lat.p, DType::BF16, {5120, T});
+    Tensor out(out_bf16, DType::BF16, {5120, T});
+    ops::t2_fwht_sign_inverse(x, static_cast<const float*>(m.signs5120.p), out, s);
+}
 
 } // namespace bq2full
