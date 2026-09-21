@@ -22,13 +22,14 @@
 
 namespace ninfer::ops::detail {
 
-template <int BM_, int BN_, int WN_ = 16>
+template <int BM_, int BN_, int WN_ = 16, bool StageCodes_ = true>
 struct T2PrefillMmaSchedule {
     static constexpr int BM = BM_;
     static constexpr int BN = BN_;
     static constexpr int BK = 128;
     static constexpr int WM = 32;
     static constexpr int WN = WN_;
+    static constexpr bool StageCodes = StageCodes_;
     static constexpr int WARPS_M = BM / WM;
     static constexpr int WARPS_N = BN / WN;
     static constexpr int WARPS   = WARPS_M * WARPS_N;
@@ -37,10 +38,15 @@ struct T2PrefillMmaSchedule {
     static constexpr int NT      = WN / 8;
     static constexpr int KSUB    = BK / 16;
     static constexpr int SMEM_BYTES =
-        BM * BK * 2 + BN * BK * 2 + BM * BK + BM * 2;
+        BM * BK * 2 + BN * BK * 2 + (StageCodes ? BM * BK : 0) + BM * 2;
+    // NOTE: BM=128 needs 56K static (>48K default cap). Prefer the no-Cr
+    // variant below for large BM; the opt-in attribute path is not used
+    // (cudaFuncSetAttribute rejected it on this WDDM driver; TBD).
     static_assert(BM % WM == 0 && BN % WN == 0);
     static_assert(THREADS <= 1024);
-    static_assert(SMEM_BYTES <= 48 * 1024);
+    static_assert(SMEM_BYTES <= 99 * 1024,
+                  "sm_120a per-CTA shared memory opt-in limit; launch must set "
+                  "MaxDynamicSharedMemorySize when SMEM_BYTES > 48K");
 };
 
 __device__ __forceinline__ int t2p_swz(int row, int col) {
@@ -69,7 +75,7 @@ __global__ __launch_bounds__(Cfg::THREADS) void t2_prefill_mma_kernel(
 
     __shared__ __align__(16) __nv_bfloat16 As[BM * BK];
     __shared__ __align__(16) __nv_bfloat16 Bs[BN * BK];
-    __shared__ __align__(16) std::uint8_t Cr[BM * BK / 4];
+    __shared__ __align__(16) std::uint8_t Cr[Cfg::StageCodes ? BM * BK / 4 : 8];
     __shared__ __align__(16) std::uint16_t Sr[BM];
 
     const int tid  = static_cast<int>(threadIdx.x);
@@ -105,16 +111,19 @@ __global__ __launch_bounds__(Cfg::THREADS) void t2_prefill_mma_kernel(
 
     const int nkt = k / BK;
     for (int kt = 0; kt < nkt; ++kt) {
-        // Stage codes: BM rows x 32B, cooperative 16B chunks.
+        // Stage codes: BM rows x 32B, cooperative 16B chunks (skipped when
+        // !StageCodes: dequant reads directly from global).
+        if constexpr (Cfg::StageCodes) {
 #pragma unroll 1
-        for (int item = tid; item < BM * 2; item += Cfg::THREADS) {
-            const int row = item / 2;
-            const int half = item % 2;
-            const int grow = m0 + row;
-            const std::int64_t gi =
-                static_cast<std::int64_t>(grow) * groups + kt;
-            cp_async<16, Cache::cg>(&Cr[row * 32 + half * 16],
-                                    &codes[gi * 32 + half * 16]);
+            for (int item = tid; item < BM * 2; item += Cfg::THREADS) {
+                const int row  = item / 2;
+                const int half = item % 2;
+                const int grow = m0 + row;
+                const std::int64_t gi =
+                    static_cast<std::int64_t>(grow) * groups + kt;
+                cp_async<16, Cache::cg>(&Cr[row * 32 + half * 16],
+                                        &codes[gi * 32 + half * 16]);
+            }
         }
         // Stage scales: BM x F16 (one per row per slab).
 #pragma unroll 1
@@ -139,14 +148,18 @@ __global__ __launch_bounds__(Cfg::THREADS) void t2_prefill_mma_kernel(
         __syncthreads();
 
         // Dequant: 128 codes/row -> BF16 As (swizzled), scale applied.
-        // Cooperative over 32-bit code words: BM*8 words (32B staged per
-        // row), 16 codes each.
+        // Cooperative over 32-bit code words: BM*8 words, 16 codes each.
+        // From shared Cr when staged, else straight from global (same bytes;
+        // global reads are 4B but L2-cached; used by the BM=128 probe to
+        // stay under the 48K static cap without the opt-in attribute).
         for (int item = tid; item < BM * 8; item += Cfg::THREADS) {
             const int row = item / 8;
             const int wrd = item % 8;
             const float scale = t2p_f16_to_float(Sr[row]);
             const std::uint32_t u =
-                reinterpret_cast<const std::uint32_t*>(&Cr[row * 32])[wrd];
+                reinterpret_cast<const std::uint32_t*>(Cfg::StageCodes
+                    ? &Cr[row * 32]
+                    : &codes[(static_cast<std::int64_t>(m0 + row) * groups + kt) * 32])[wrd];
             const int base = wrd * 16;
 #pragma unroll
             for (int c = 0; c < 16; ++c) {

@@ -273,7 +273,7 @@ int main() {
                 {"fd", model.gdn[8].fd, "text/layers/8/ffn_down", 5120, 17408},
                 {"qkv", model.gdn[8].qkv, "text/layers/8/attn_qkv", 10240, 5120},
             };
-            for (int T : {8, 32, 128}) {
+            for (int T : {8, 32, 64, 128}) {
                 for (const auto& pf : pfs) {
                     DeviceBuffer dx(pf.cols * T * 2), dy0(pf.rows * T * 2),
                         dy1(pf.rows * T * 2);
@@ -305,6 +305,39 @@ int main() {
                         d1.push_back(t.stop_ms(stream));
                     }
                     const double m0 = med(d0), m1 = med(d1);
+                    // B2 tile probes on fg (largest family): BM=128 and
+                    // BN=64 (T=64/128 only) vs default 64x32.
+                    double m128 = -1.0, m64 = -1.0;
+                    if (pf.rows == 17408 && (T == 32 || T == 64 || T == 128)) {
+                        DeviceBuffer dy2(pf.rows * T * 2);
+                        Tensor y2(dy2.p, DType::BF16, {pf.rows, T});
+                        std::vector<double> d128;
+                        for (int i = 0; i < 3; ++i) {
+                            ops::detail::launch_t2_prefill_mma_128x32(x, pf.w, y2, stream);
+                        }
+                        device.synchronize();
+                        for (int i = 0; i < 10; ++i) {
+                            t.start(stream);
+                            ops::detail::launch_t2_prefill_mma_128x32(x, pf.w, y2, stream);
+                            d128.push_back(t.stop_ms(stream));
+                        }
+                        m128 = med(d128);
+                    }
+                    if (pf.rows == 17408 && (T == 64 || T == 128)) {
+                        DeviceBuffer dy3(pf.rows * T * 2);
+                        Tensor y3(dy3.p, DType::BF16, {pf.rows, T});
+                        std::vector<double> d64;
+                        for (int i = 0; i < 3; ++i) {
+                            ops::detail::launch_t2_prefill_mma_64x32(x, pf.w, y3, stream);
+                        }
+                        device.synchronize();
+                        for (int i = 0; i < 10; ++i) {
+                            t.start(stream);
+                            ops::detail::launch_t2_prefill_mma_64x32(x, pf.w, y3, stream);
+                            d64.push_back(t.stop_ms(stream));
+                        }
+                        m64 = med(d64);
+                    }
                     std::vector<std::uint16_t> b0(pf.rows * T), b1(pf.rows * T);
                     CUDA_CHECK(cudaMemcpy(b0.data(), dy0.p, b0.size() * 2,
                                           cudaMemcpyDeviceToHost));
@@ -329,13 +362,21 @@ int main() {
                     const double wbytes = (double)pf.rows * (pf.cols / 128) * 34.0;
                     const double abytes = (double)pf.cols * T * 2.0;
                     const double obytes = (double)pf.rows * T * 2.0;
+                    if (m128 > 0) {
+                        std::printf("  tile128x32 fg T=%-4d med=%.4fms vs6464x32=%.4fms ratio=%.3f\n",
+                                    T, m128, m1, m1 / m128);
+                    }
+                    if (m64 > 0) {
+                        std::printf("  tile64x32ref  fg T=%-4d med=%.4fms vs64x32=%.4fms ratio=%.3f\n",
+                                    T, m64, m1, m1 / m64);
+                    }
                     std::printf("p1 %-4s T=%-4d base=%.4fms proto=%.4fms speedup=%.3f "
                                 "delta-maxabs=%.6f delta-rmse=%.6f cos=%.8f "
                                 "wMB=%.1f aMB=%.1f oMB=%.1f\n",
                                 pf.name, T, m0, m1, m0 / m1, mx, rmse, cos,
                                 wbytes / 1e6, abytes / 1e6, obytes / 1e6);
                     // FP64 oracle on subsampled rows (T<=32; T=128 fg only).
-                    if (T <= 32 || (T == 128 && pf.rows == 17408)) {
+                    if (T <= 64 || (T == 128 && pf.rows == 17408)) {
                         const int RCHK = 256;
                         const artifact::PayloadSpan span = model.reader.payload(pf.art);
                         const std::uint8_t* ep =
