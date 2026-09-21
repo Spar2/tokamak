@@ -155,6 +155,20 @@ int main() {
                         da.push_back(t.stop_ms(stream));
                     }
                     const double ma = med(da);
+                    // D2 occupancy probe: same kernel, 128-thread blocks.
+                    DeviceBuffer dy3(fm.rows * 2);
+                    Tensor y3(dy3.p, DType::BF16, {fm.rows, 1});
+                    std::vector<double> db;
+                    for (int i = 0; i < 5; ++i) {
+                        ops::detail::launch_t2_gemv_t1a_b128(x, fm.w, y3, stream);
+                    }
+                    device.synchronize();
+                    for (int i = 0; i < 20; ++i) {
+                        t.start(stream);
+                        ops::detail::launch_t2_gemv_t1a_b128(x, fm.w, y3, stream);
+                        db.push_back(t.stop_ms(stream));
+                    }
+                    const double mb = med(db);
                     std::vector<std::uint16_t> b0(fm.rows), b1(fm.rows);
                     CUDA_CHECK(cudaMemcpy(b0.data(), dy.p, b0.size() * 2,
                                           cudaMemcpyDeviceToHost));
@@ -164,6 +178,7 @@ int main() {
                     for (std::size_t i = 0; i < b0.size(); ++i) {
                         if (b0[i] != b1[i]) { ++mism; }
                     }
+                    std::printf("  b128 %-8s med=%.4fms vs256=%.3f\n", fm.name, mb, ma / mb);
                     std::printf("  d2a  %-8s med=%.4fms speedup=%.3f biteq=%s\n", fm.name, ma,
                                 ms / ma, mism == 0 ? "YES" : "NO");
                     if (mism != 0) { ok = false; }

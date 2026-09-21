@@ -276,4 +276,20 @@ void launch_t2_gemv_d2a(const Tensor& x, const Weight& w, Tensor& out, cudaStrea
     CUDA_CHECK(cudaGetLastError());
 }
 
+
+// D2 occupancy probe (NOT dispatched): identical T1-A kernel, 128-thread
+// blocks (grid scales accordingly). Tests latency-vs-issue behavior.
+void launch_t2_gemv_t1a_b128(const Tensor& x, const Weight& w, Tensor& out,
+                             cudaStream_t stream) {
+    const std::int32_t rows = out.ne[0];
+    const std::int32_t k    = x.ne[0];
+    const dim3 grid(static_cast<unsigned>((rows + 127) / 128), 1u, 1u);
+    constexpr dim3 block(128u, 1u, 1u);
+    t2_rowsplit_gemv_t1a_kernel<<<grid, block, 0u, stream>>>(
+        static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
+        static_cast<const std::uint16_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data),
+        rows, k);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 } // namespace ninfer::ops::detail
