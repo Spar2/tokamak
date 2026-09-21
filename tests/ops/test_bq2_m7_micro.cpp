@@ -273,7 +273,10 @@ int main() {
                 {"fd", model.gdn[8].fd, "text/layers/8/ffn_down", 5120, 17408},
                 {"qkv", model.gdn[8].qkv, "text/layers/8/attn_qkv", 10240, 5120},
             };
-            for (int T : {8, 32, 64, 128}) {
+            // B3 crossover tails: T=7/31/33 run production only (the
+            // prototype supports exact tiles; it must reject tails cleanly
+            // so future dispatch can fall back safely).
+            for (int T : {7, 8, 31, 32, 33, 64, 128}) {
                 for (const auto& pf : pfs) {
                     DeviceBuffer dx(pf.cols * T * 2), dy0(pf.rows * T * 2),
                         dy1(pf.rows * T * 2);
@@ -289,9 +292,12 @@ int main() {
                     Tensor y1(dy1.p, DType::BF16, {pf.rows, T});
                     M7Timer t;
                     std::vector<double> d0, d1;
+                    const bool proto_ok = (T == 8 || T == 32 || T == 64 || T == 128);
                     for (int i = 0; i < 3; ++i) {
                         ops::linear(x, pf.w, y0, stream);
-                        ops::detail::launch_t2_prefill_mma(x, pf.w, y1, stream);
+                        if (proto_ok) {
+                            ops::detail::launch_t2_prefill_mma(x, pf.w, y1, stream);
+                        }
                     }
                     device.synchronize();
                     for (int i = 0; i < 10; ++i) {
@@ -299,12 +305,14 @@ int main() {
                         ops::linear(x, pf.w, y0, stream);
                         d0.push_back(t.stop_ms(stream));
                     }
-                    for (int i = 0; i < 10; ++i) {
-                        t.start(stream);
-                        ops::detail::launch_t2_prefill_mma(x, pf.w, y1, stream);
-                        d1.push_back(t.stop_ms(stream));
+                    if (proto_ok) {
+                        for (int i = 0; i < 10; ++i) {
+                            t.start(stream);
+                            ops::detail::launch_t2_prefill_mma(x, pf.w, y1, stream);
+                            d1.push_back(t.stop_ms(stream));
+                        }
                     }
-                    const double m0 = med(d0), m1 = med(d1);
+                    const double m0 = med(d0), m1 = proto_ok ? med(d1) : -1.0;
                     // B2 tile probes on fg (largest family): BM=128 and
                     // BN=64 (T=64/128 only) vs default 64x32.
                     double m128 = -1.0, m64 = -1.0;
@@ -337,6 +345,25 @@ int main() {
                             d64.push_back(t.stop_ms(stream));
                         }
                         m64 = med(d64);
+                    }
+                    if (!proto_ok) {
+                        // Tail case: production-only timing + prototype must
+                        // reject cleanly (safe fallback for future dispatch).
+                        std::printf("p1 %-4s T=%-4d base=%.4fms proto=N/A (tail: exact tiles only)\n",
+                                    pf.name, T, m0);
+                        DeviceBuffer dy4(pf.rows * T * 2);
+                        Tensor y4(dy4.p, DType::BF16, {pf.rows, T});
+                        DeviceBuffer dx7(pf.cols * T * 2);
+                        const Tensor x7(dx7.p, DType::BF16, {pf.cols, T});
+                        bool threw = false;
+                        try {
+                            ops::detail::launch_t2_prefill_mma(x7, pf.w, y4, stream);
+                        } catch (const std::invalid_argument&) { threw = true; }
+                        device.synchronize();
+                        std::printf("  tailcheck %-4s T=%-4d prototype throws=%s\n", pf.name, T,
+                                    threw ? "YES" : "NO");
+                        if (!threw) { ok = false; }
+                        continue;
                     }
                     std::vector<std::uint16_t> b0(pf.rows * T), b1(pf.rows * T);
                     CUDA_CHECK(cudaMemcpy(b0.data(), dy0.p, b0.size() * 2,
