@@ -13,7 +13,10 @@ using T2Launch = void (*)(const Tensor&, const Weight&, Tensor&, cudaStream_t);
 
 void launch_t2_gemv(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream);
 void launch_t2_gemv_t1a(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream);
-// M7-P1 prototype (NOT production-dispatched): tiled PQ2 -> shared BF16 MMA.
+// M7-P1 tiled PQ2 -> shared BF16 MMA path. Scratch-dispatched behind the
+// NINFER_T2_PREFILL_P1 env gate for T=8 only (the 64x8 schedule is the sole
+// bit-deterministic configuration); direct calls remain for micro/oracle
+// tests. T=32/64/128 schedules are NOT dispatched (stochastic race).
 void launch_t2_prefill_mma(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream);
 // B2 tile-sensitivity probes (NOT dispatched).
 void launch_t2_prefill_mma_128x32(const Tensor& x, const Weight& w, Tensor& out,
@@ -21,7 +24,7 @@ void launch_t2_prefill_mma_128x32(const Tensor& x, const Weight& w, Tensor& out,
 void launch_t2_prefill_mma_64x32(const Tensor& x, const Weight& w, Tensor& out,
                                  cudaStream_t stream);
 void launch_t2_prefill_mma_64x64(const Tensor& x, const Weight& w, Tensor& out,
-                                 cudaStream_t stream);
+                                  cudaStream_t stream);
 
 [[nodiscard]] std::size_t t2_prefill_mma_workspace_capacity_bytes(std::int32_t n, std::int32_t k,
                                                                   std::int32_t t);

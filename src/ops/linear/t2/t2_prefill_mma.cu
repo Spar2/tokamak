@@ -1,5 +1,6 @@
 // M7-P1 prototype TU: explicit instantiations + launch wrapper.
-// NOT production-dispatched (called directly by the P1 micro test).
+// Scratch-dispatched via select_t2_launch behind NINFER_T2_PREFILL_P1=1 for
+// T=8 only; called directly by the P1 micro test.
 #include "ops/linear/t2/t2_prefill_mma.cuh"
 
 #include "core/device.h"
@@ -85,7 +86,7 @@ std::size_t t2_prefill_mma_workspace_capacity_bytes(std::int32_t n, std::int32_t
 }
 
 void launch_t2_prefill_mma_64x64(const Tensor& x, const Weight& w, Tensor& out,
-                                 cudaStream_t stream) {
+                                  cudaStream_t stream) {
     launch_cfg<T2PrefillMmaSchedule<64, 64, 16>>(x, w, out, stream);
 }
 
