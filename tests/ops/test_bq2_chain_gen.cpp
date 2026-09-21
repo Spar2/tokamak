@@ -158,6 +158,9 @@ struct PromptCase {
 // Dumped teacher-forced steps (Prism prefix runs with full logits).
 const int kDumpedSteps[] = {0, 1, 2, 3, 7, 15, 31};
 
+// Decode-step latencies across all prompts (M7 decode distribution).
+std::vector<double> g_dec_ms;
+
 } // namespace
 
 int main() {
@@ -234,10 +237,13 @@ int main() {
                         DeviceBuffer dl(kVocabPhys * 2);
                         head_logits(model, dh.p, 1, stream, dl.p);
                         device.synchronize();
-                        dec_ms += std::chrono::duration<double, std::milli>(
-                                      std::chrono::steady_clock::now() - t_dec0)
-                                      .count();
+                        const double step_ms =
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - t_dec0)
+                                .count();
+                        dec_ms += step_ms;
                         ++dec_n;
+                        g_dec_ms.push_back(step_ms);
                         lg_host = d2h_bf16(device, dl.p, kVocabPhys);
                     }
                     // Column layout: prefill host is [V,lp] column-major.
@@ -425,6 +431,13 @@ int main() {
             }
         }
         std::printf("near-ties excused: %d\n", near_ties);
+        if (!g_dec_ms.empty()) {
+            std::sort(g_dec_ms.begin(), g_dec_ms.end());
+            const std::size_t n = g_dec_ms.size();
+            std::printf("decode ms/token: n=%d min=%.2f p10=%.2f median=%.2f p90=%.2f max=%.2f\n",
+                        (int)n, g_dec_ms.front(), g_dec_ms[n / 10], g_dec_ms[n / 2],
+                        g_dec_ms[n * 9 / 10], g_dec_ms.back());
+        }
         std::printf("%s BQ2_CHAIN_GEN\n", ok ? "OK" : "FAIL");
         return ok ? 0 : 1;
     } catch (const std::exception& error) {
