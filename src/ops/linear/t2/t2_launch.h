@@ -25,6 +25,14 @@ void launch_t2_prefill_mma_64x32(const Tensor& x, const Weight& w, Tensor& out,
                                  cudaStream_t stream);
 void launch_t2_prefill_mma_64x64(const Tensor& x, const Weight& w, Tensor& out,
                                   cudaStream_t stream);
+// P1-SYNC: deterministic synchronous 64x32 fused K-loop (T=32/64/128).
+// NOT dispatched; called by determinism/numerics probes and (after the
+// determinism gate) by scratch large-T dispatch.
+void launch_t2_prefill_mma_sync(const Tensor& x, const Weight& w, Tensor& out,
+                                 cudaStream_t stream);
+// Serialized per-slab diagnostic (NOT production): single-slab partial.
+void launch_t2_prefill_mma_sync_slab(const Tensor& x, const Weight& w, Tensor& out,
+                                      cudaStream_t stream, std::int32_t kt_sel);
 
 [[nodiscard]] std::size_t t2_prefill_mma_workspace_capacity_bytes(std::int32_t n, std::int32_t k,
                                                                   std::int32_t t);
