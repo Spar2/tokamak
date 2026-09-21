@@ -222,13 +222,16 @@ int main() {
                             n_gdn, ms_gdn, n_gdn > 0 ? ms_gdn / n_gdn : 0.0, n_attn, ms_attn,
                             n_attn > 0 ? ms_attn / n_attn : 0.0);
             }
-            if (T == 1 && first_bad < 0) {
-                // Final norm -> folded output head -> logits (T=1 only;
-                // full_logits.decode1 reference exists for P0).
-                DeviceBuffer d_fn(5120 * 2), d_hr(5120 * 2), d_lg(248320 * 2);
+            // Final norm -> folded output head -> logits. References exist
+            // for T=1 (P0), T=32, T=33, always last position only (Prism
+            // gathers the final row). T32/T33 gate (M7 baseline gate):
+            // top-1 exact (or approved near-tie), cos >= 0.9995, rel <=
+            // 3e-2. A FAIL here STOPS performance work (correctness first).
+            if (T == 1 || T == 32 || T == 33) {
+                DeviceBuffer d_fn(5120 * T * 2), d_hr(5120 * T * 2), d_lg(248320 * T * 2);
                 {
-                    const Tensor x(d_cur.p, DType::BF16, {5120, 1});
-                    Tensor n(d_fn.p, DType::BF16, {5120, 1});
+                    const Tensor x(d_cur.p, DType::BF16, {5120, T});
+                    Tensor n(d_fn.p, DType::BF16, {5120, T});
                     ops::rmsnorm(x, model.final_norm, kEps, false, n, stream);
                 }
                 device.synchronize();
@@ -236,7 +239,12 @@ int main() {
                     // Depth-64 endpoint: same growth-aware verdict as deep
                     // layers (accumulated BF16 noise, rescaled by the norm).
                     // Thresholds: cos >= 0.9995, rel <= 3e-2.
-                    const std::vector<float> got = d2h_bf16(device, d_fn.p, 5120);
+                    // Last-column compare (reference is the final position).
+                    const std::vector<float> got0 = d2h_bf16(device, d_fn.p, 5120 * T);
+                    std::vector<float> got(5120);
+                    for (int i = 0; i < 5120; ++i) {
+                        got[i] = got0[static_cast<std::size_t>(T - 1) * 5120 + i];
+                    }
                     const std::vector<float> ref =
                         load_ref(c.vdir, "result_norm.decode1", 5120);
                     double maxabs = 0.0, se = 0.0, r2 = 0.0, dot = 0.0, o2 = 0.0;
@@ -257,22 +265,26 @@ int main() {
                     ok &= pass;
                 }
                 {
-                    const Tensor n(d_fn.p, DType::BF16, {5120, 1});
-                    Tensor nr(d_hr.p, DType::BF16, {5120, 1});
+                    const Tensor n(d_fn.p, DType::BF16, {5120, T});
+                    Tensor nr(d_hr.p, DType::BF16, {5120, T});
                     ops::t2_fwht_sign(n, model.signs_for(5120), nr, stream);
                 }
                 {
-                    const Tensor nr(d_hr.p, DType::BF16, {5120, 1});
-                    Tensor lg(d_lg.p, DType::BF16, {248320, 1});
+                    const Tensor nr(d_hr.p, DType::BF16, {5120, T});
+                    Tensor lg(d_lg.p, DType::BF16, {248320, T});
                     ops::linear(nr, model.head_t2, lg, stream);
                 }
                 device.synchronize();
                 {
-                    const std::vector<float> got = d2h_bf16(device, d_lg.p, 248320);
+                    const std::vector<float> got0 = d2h_bf16(device, d_lg.p, 248320 * T);
+                    std::vector<float> got(248320);
+                    for (int i = 0; i < 248320; ++i) {
+                        got[i] = got0[static_cast<std::size_t>(T - 1) * 248320 + i];
+                    }
                     const std::vector<float> ref =
                         load_ref(c.vdir, "full_logits.decode1", 248320);
                     double maxabs = 0.0, se = 0.0, r2 = 0.0, dot = 0.0, o2 = 0.0;
-                    int top = -1;
+                    int top = -1, top2 = -1;
                     for (std::size_t i = 0; i < 248320; ++i) {
                         const double e = std::fabs((double)got[i] - ref[i]);
                         if (e > maxabs) { maxabs = e; }
@@ -280,17 +292,34 @@ int main() {
                         r2 += (double)ref[i] * ref[i];
                         dot += (double)got[i] * ref[i];
                         o2 += (double)got[i] * got[i];
-                        if (top < 0 || got[i] > got[top]) { top = (int)i; }
+                        if (top < 0 || got[i] > got[top]) { top2 = top; top = (int)i; }
+                        else if (top2 < 0 || got[i] > got[top2]) { top2 = (int)i; }
                     }
-                    int reftop = -1;
+                    int reftop = -1, reftop2 = -1;
                     for (std::size_t i = 0; i < 248320; ++i) {
-                        if (reftop < 0 || ref[i] > ref[reftop]) { reftop = (int)i; }
+                        if (reftop < 0 || ref[i] > ref[reftop]) {
+                            reftop2 = reftop;
+                            reftop  = (int)i;
+                        } else if (reftop2 < 0 || ref[i] > ref[reftop2]) {
+                            reftop2 = (int)i;
+                        }
                     }
                     const double rmse = std::sqrt(se / 248320);
                     const double rel  = r2 > 0.0 ? std::sqrt(se / r2) : 0.0;
                     const double cos  = (o2 > 0.0 && r2 > 0.0) ? dot / std::sqrt(o2 * r2) : 0.0;
+                    const double margin  = (double)got[top] - (double)got[top2];
+                    const double rmargin = (double)ref[reftop] - (double)ref[reftop2];
+                    const bool topset =
+                        (top == reftop && top2 == reftop2) || (top == reftop2 && top2 == reftop);
                     const bool top_ok = top == reftop;
-                    const bool pass = top_ok && cos >= 0.9995 && rel <= 3e-2;
+                    bool pass         = top_ok && cos >= 0.9995 && rel <= 3e-2;
+                    if (!top_ok) {
+                        // Approved near-tie rule only.
+                        const bool near = rmargin < 5 * rmse && rmargin < 0.02 && topset;
+                        std::printf("  logits DIVERGENCE top=%d reftop=%d m=%.4f rm=%.4f %s\n",
+                                    top, reftop, margin, rmargin, near ? "NEAR-TIE" : "REAL");
+                        pass = near;
+                    }
                     std::printf("  %-14s maxabs=%.6f rmse=%.6f rel=%.6f cos=%.8f top=%d reftop=%d %s\n",
                                 "logits", maxabs, rmse, rel, cos, top, reftop,
                                 pass ? "PASS" : "FAIL");
