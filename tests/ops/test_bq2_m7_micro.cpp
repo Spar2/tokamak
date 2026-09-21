@@ -6,6 +6,7 @@
 #include "ops/bq2_model_common.h"
 
 #include "ninfer/ops/linear.h"
+#include "ops/linear/t2/t2_launch.h"
 
 #include <algorithm>
 #include <chrono>
@@ -139,6 +140,34 @@ int main() {
                     (double)fm.rows * (fm.cols / 128) * 34.0;
                 std::printf("gemv %-8s R=%-6d K=%-5d T=%-3d med=%.4fms wGB/s=%.1f\n", fm.name,
                             fm.rows, fm.cols, T, ms, wbytes / ms * 1e-6);
+                // T1-A side-by-side (T=1 only): same input, bit-compare + time.
+                if (T == 1) {
+                    DeviceBuffer dy2(fm.rows * 2);
+                    Tensor y2(dy2.p, DType::BF16, {fm.rows, 1});
+                    std::vector<double> da;
+                    for (int i = 0; i < 5; ++i) {
+                        ops::detail::launch_t2_gemv_t1a(x, fm.w, y2, stream);
+                    }
+                    device.synchronize();
+                    for (int i = 0; i < 20; ++i) {
+                        t.start(stream);
+                        ops::detail::launch_t2_gemv_t1a(x, fm.w, y2, stream);
+                        da.push_back(t.stop_ms(stream));
+                    }
+                    const double ma = med(da);
+                    std::vector<std::uint16_t> b0(fm.rows), b1(fm.rows);
+                    CUDA_CHECK(cudaMemcpy(b0.data(), dy.p, b0.size() * 2,
+                                          cudaMemcpyDeviceToHost));
+                    CUDA_CHECK(cudaMemcpy(b1.data(), dy2.p, b1.size() * 2,
+                                          cudaMemcpyDeviceToHost));
+                    std::size_t mism = 0;
+                    for (std::size_t i = 0; i < b0.size(); ++i) {
+                        if (b0[i] != b1[i]) { ++mism; }
+                    }
+                    std::printf("  t1a  %-8s med=%.4fms speedup=%.3f biteq=%s\n", fm.name, ma,
+                                ms / ma, mism == 0 ? "YES" : "NO");
+                    if (mism != 0) { ok = false; }
+                }
             }
         }
 
