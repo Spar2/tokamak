@@ -162,4 +162,118 @@ void launch_t2_gemv_t1a(const Tensor& x, const Weight& w, Tensor& out, cudaStrea
     CUDA_CHECK(cudaGetLastError());
 }
 
+
+// D2-A: scale-plane transaction efficiency variant of the T1-A kernel
+// (experiment only; NOT dispatched). Identical mapping, FP order, and values
+// (bit-identical by construction); only scale loads change:
+// - scale batching legal iff (groups*2)%16==0, i.e. groups%8==0 (all
+//   production K satisfy K%1024==0, hence per-row scale runs are 16B-aligned
+//   for every row: byte offset r*groups*2 with groups*2 a multiple of 16).
+//   Uniform per kernel (groups is kernel-uniform) -> no divergence.
+// - batched path: one LDG.E.128 (uint4 = 8 F16 scales) per 8 groups, then
+//   the EXACT per-group T1-A body 8x in order (same e/o/acc sequence).
+// - tail path (groups%8 remainder, or sbatch false): scalar T1-A body.
+// Per-group traffic: 32B codes + 2B scales (~34B, ~1.0x) instead of 32B codes
+// + a full 32B scale sector (~64B, ~1.9x).
+__device__ __forceinline__ void t2_d2a_group(
+    float s, const std::uint8_t* grow_base, const std::uint32_t* xw, const uint4* xw4,
+    bool xwide, std::int32_t g, float& acc0, float& acc1) {
+    const uint4* crow = reinterpret_cast<const uint4*>(grow_base + static_cast<std::size_t>(g) * 32);
+    const uint4 c0    = crow[0];
+    const uint4 c1    = crow[1];
+    const std::uint32_t words[8] = {c0.x, c0.y, c0.z, c0.w, c1.x, c1.y, c1.z, c1.w};
+    float e = 0.0F;
+    float o = 0.0F;
+#pragma unroll
+    for (int w = 0; w < 8; ++w) {
+        const std::uint32_t u = words[w];
+        std::uint32_t xs[8];
+        if (xwide) {
+            const uint4 xq0 = xw4[static_cast<std::size_t>(g) * 16 + w * 2];
+            const uint4 xq1 = xw4[static_cast<std::size_t>(g) * 16 + w * 2 + 1];
+            xs[0] = xq0.x;
+            xs[1] = xq0.y;
+            xs[2] = xq0.z;
+            xs[3] = xq0.w;
+            xs[4] = xq1.x;
+            xs[5] = xq1.y;
+            xs[6] = xq1.z;
+            xs[7] = xq1.w;
+        } else {
+            const std::uint32_t* xb = xw + static_cast<std::size_t>(g) * 64 + w * 8;
+#pragma unroll
+            for (int m = 0; m < 8; ++m) { xs[m] = xb[m]; }
+        }
+#pragma unroll
+        for (int m = 0; m < 8; ++m) {
+            const int q0 = static_cast<int>((u >> (m * 4)) & 3u);
+            const int q1 = static_cast<int>((u >> (m * 4 + 2)) & 3u);
+            const std::uint32_t xword = xs[m];
+            const float a0 =
+                __bfloat162float(__ushort_as_bfloat16(static_cast<unsigned short>(xword)));
+            const float a1 =
+                __bfloat162float(__ushort_as_bfloat16(static_cast<unsigned short>(xword >> 16)));
+            e += static_cast<float>(q0 - 1) * a0;
+            o += static_cast<float>(q1 - 1) * a1;
+        }
+    }
+    acc0 += s * e;
+    acc1 += s * o;
+}
+
+__global__ void t2_rowsplit_gemv_d2a_kernel(const __nv_bfloat16* __restrict__ x,
+                                            const std::uint8_t* __restrict__ qdata,
+                                            const std::uint16_t* __restrict__ scales,
+                                            __nv_bfloat16* __restrict__ out, std::int32_t rows,
+                                            std::int32_t k) {
+    const std::int32_t r = static_cast<std::int32_t>(blockIdx.x * blockDim.x + threadIdx.x);
+    if (r >= rows) { return; }
+    const std::int32_t groups = k / 128;
+    const std::uint8_t* row_base =
+        qdata + static_cast<std::size_t>(r) * static_cast<std::size_t>(groups) * 32;
+    const std::uint32_t* xw = reinterpret_cast<const std::uint32_t*>(x);
+    const bool xwide        = ((reinterpret_cast<std::uintptr_t>(x) & 15u) == 0u);
+    const uint4* xw4        = reinterpret_cast<const uint4*>(x);
+    const std::uint16_t* srow = scales + static_cast<std::size_t>(r) * groups;
+    const bool sbatch         = ((static_cast<std::uint32_t>(groups) * 2u) % 16u) == 0u;
+    float acc0                = 0.0F;
+    float acc1                = 0.0F;
+    std::int32_t g            = 0;
+    if (sbatch) {
+        for (; g + 8 <= groups; g += 8) {
+            const uint4 s4 = reinterpret_cast<const uint4*>(srow)[g >> 3];
+            const std::uint16_t sh[8] = {
+                static_cast<std::uint16_t>(s4.x & 0xffffu),
+                static_cast<std::uint16_t>(s4.x >> 16),
+                static_cast<std::uint16_t>(s4.y & 0xffffu),
+                static_cast<std::uint16_t>(s4.y >> 16),
+                static_cast<std::uint16_t>(s4.z & 0xffffu),
+                static_cast<std::uint16_t>(s4.z >> 16),
+                static_cast<std::uint16_t>(s4.w & 0xffffu),
+                static_cast<std::uint16_t>(s4.w >> 16)};
+#pragma unroll
+            for (int j = 0; j < 8; ++j) {
+                t2_d2a_group(f16_bits_to_float(sh[j]), row_base, xw, xw4, xwide, g + j, acc0,
+                             acc1);
+            }
+        }
+    }
+    for (; g < groups; ++g) {
+        t2_d2a_group(f16_bits_to_float(srow[g]), row_base, xw, xw4, xwide, g, acc0, acc1);
+    }
+    out[r] = __float2bfloat16(acc0 + acc1);
+}
+
+void launch_t2_gemv_d2a(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
+    const std::int32_t rows = out.ne[0];
+    const std::int32_t k    = x.ne[0];
+    const dim3 grid(static_cast<unsigned>((rows + 255) / 256), 1u, 1u);
+    constexpr dim3 block(256u, 1u, 1u);
+    t2_rowsplit_gemv_d2a_kernel<<<grid, block, 0u, stream>>>(
+        static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
+        static_cast<const std::uint16_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data),
+        rows, k);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 } // namespace ninfer::ops::detail

@@ -146,12 +146,12 @@ int main() {
                     Tensor y2(dy2.p, DType::BF16, {fm.rows, 1});
                     std::vector<double> da;
                     for (int i = 0; i < 5; ++i) {
-                        ops::detail::launch_t2_gemv_t1a(x, fm.w, y2, stream);
+                        ops::detail::launch_t2_gemv_d2a(x, fm.w, y2, stream);
                     }
                     device.synchronize();
                     for (int i = 0; i < 20; ++i) {
                         t.start(stream);
-                        ops::detail::launch_t2_gemv_t1a(x, fm.w, y2, stream);
+                        ops::detail::launch_t2_gemv_d2a(x, fm.w, y2, stream);
                         da.push_back(t.stop_ms(stream));
                     }
                     const double ma = med(da);
@@ -164,7 +164,7 @@ int main() {
                     for (std::size_t i = 0; i < b0.size(); ++i) {
                         if (b0[i] != b1[i]) { ++mism; }
                     }
-                    std::printf("  t1a  %-8s med=%.4fms speedup=%.3f biteq=%s\n", fm.name, ma,
+                    std::printf("  d2a  %-8s med=%.4fms speedup=%.3f biteq=%s\n", fm.name, ma,
                                 ms / ma, mism == 0 ? "YES" : "NO");
                     if (mism != 0) { ok = false; }
                 }
@@ -222,6 +222,46 @@ int main() {
                 ds.push_back(t.stop_ms(stream));
             }
             std::printf("gdn-core T=1 med=%.4fms\n", med(ds));
+        }
+
+        // ---- D2-A cold-cache test (L2 evicted): T1-A vs D2-A ----
+        // The L2-hot micro above cannot see DRAM transaction effects.
+        {
+            DeviceBuffer flush(1ULL * 1024 * 1024 * 1024ULL);
+            for (const auto& nm : {"fg", "fd"}) {
+                const Weight* wp = nullptr;
+                int rows = 0, cols = 0;
+                if (nm == std::string("fg")) { wp = &model.gdn[8].fg; rows = 17408; cols = 5120; }
+                else { wp = &model.gdn[8].fd; rows = 5120; cols = 17408; }
+                const int T = 1;
+                DeviceBuffer dx(cols * 2), dy0(rows * 2), dy1(rows * 2);
+                {
+                    std::vector<std::uint16_t> bits(cols);
+                    for (std::size_t i = 0; i < bits.size(); ++i) {
+                        bits[i] = (std::uint16_t)(0x3C00 + (i % 64));
+                    }
+                    dx.copy_from_host(bits.data(), bits.size() * 2);
+                }
+                const Tensor x(dx.p, DType::BF16, {cols, T});
+                Tensor y0(dy0.p, DType::BF16, {rows, T});
+                Tensor y1(dy1.p, DType::BF16, {rows, T});
+                M7Timer t;
+                std::vector<double> dbase, dnew;
+                for (int i = 0; i < 3; ++i) {
+                    flush.fill(i);
+                    device.synchronize();
+                    t.start(stream);
+                    ops::linear(x, *wp, y0, stream);
+                    dbase.push_back(t.stop_ms(stream));
+                    flush.fill(100 + i);
+                    device.synchronize();
+                    t.start(stream);
+                    ops::detail::launch_t2_gemv_d2a(x, *wp, y1, stream);
+                    dnew.push_back(t.stop_ms(stream));
+                }
+                std::printf("cold %-4s base=%.4fms d2a=%.4fms speedup=%.3f\n", nm, med(dbase),
+                            med(dnew), med(dbase) / med(dnew));
+            }
         }
 
         // ---- exp 4: cold-cache vs warm (fg 17408x5120, T=32) ----
