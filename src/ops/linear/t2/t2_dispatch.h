@@ -13,15 +13,16 @@ void t2_dispatch(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy pol
                  cudaStream_t stream);
 
 // M7-P1 scratch integration (reversible, env-gated):
-//   NINFER_T2_PREFILL_P1=1 routes the exact T=8 tile (N%64==0, K%128==0) to
-//   the tiled BF16-MMA path; every other T keeps the existing
-//   row-persistent/chunked path. T=8/64x8 is the only P1 schedule proven
-//   bit-deterministic; T=32/64/128 are deliberately NOT routed (fused-kernel
-//   stochastic race under investigation). Env is read on every call so
-//   routing tests can toggle it in-process. t2_dispatch additionally guards
-//   on BF16 contiguity and silently falls back when the prototype's
-//   requirements are not met (never throws into the model). Stats report
-//   (p1, fallback) launch counts since process start.
+//   NINFER_T2_PREFILL_P1=1 routes exact tiles (N%64==0, K%128==0) to P1:
+//   T=8 -> async 64x8 prototype; T=32/64/128 -> P1-SYNC fused path.
+//   Every other T keeps the existing row-persistent/chunked path.
+//   Init contract (churn hazard): persistent no-churn T2 buffers + mode-E
+//   (sync + sacrificial stateless T2 warmup + sync) at startup; serving
+//   reuses buffers. Env is read on every call so routing tests can toggle
+//   it in-process. t2_dispatch additionally guards on BF16 contiguity and
+//   silently falls back when the prototype's requirements are not met
+//   (never throws into the model). Stats report (p1, fallback) launch
+//   counts since process start.
 [[nodiscard]] bool t2_prefill_p1_enabled();
 [[nodiscard]] bool t2_prefill_p1_applies(std::int32_t n, std::int32_t k, std::int32_t t);
 void t2_prefill_p1_stats(std::uint64_t& p1, std::uint64_t& fallback);
