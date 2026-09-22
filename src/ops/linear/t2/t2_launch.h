@@ -32,6 +32,11 @@ void launch_t2_prefill_mma_sync(const Tensor& x, const Weight& w, Tensor& out,
 // P1-SYNC-8: synchronous 64x8 path for T=8 (replaces async in dispatch).
 void launch_t2_prefill_mma_sync8(const Tensor& x, const Weight& w, Tensor& out,
                                   cudaStream_t stream);
+// P1-SYNC masked-tail path (BM=64/BN=32, arbitrary T>=9): full tiles plus
+// one zero-masked final token tile. NOT dispatched until the tail matrix
+// passes; called by tail probes.
+void launch_t2_prefill_mma_sync_mt(const Tensor& x, const Weight& w, Tensor& out,
+                                    cudaStream_t stream);
 // Serialized per-slab diagnostic (NOT production): single-slab partial.
 void launch_t2_prefill_mma_sync_slab(const Tensor& x, const Weight& w, Tensor& out,
                                       cudaStream_t stream, std::int32_t kt_sel);

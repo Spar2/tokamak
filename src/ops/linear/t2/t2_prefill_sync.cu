@@ -304,6 +304,212 @@ void launch_t2_prefill_mma_sync8(const Tensor& x, const Weight& w, Tensor& out,
     CUDA_CHECK(cudaGetLastError());
 }
 
+// P1-SYNC masked-tail kernel (BM=64/BN=32/BK=128, arbitrary T>=9).
+//
+// Same synchronous ownership model as the exact-tile path; the only
+// differences are token-bounds handling in the final (partial) CTA tile.
+// Per CTA token tile: n_valid = min(BN, T - n0) valid tokens.
+//
+// BOUNDS / ZERO-LANE PROOF:
+// - Global reads: codes/scales identical to the exact path (row-major,
+//   in-bounds). x reads guarded by nn<T; the 8-element uint4 chunk stays
+//   within its row (kk+7 < (kt+1)*BK <= K). Invalid lanes NEVER issue a
+//   global read.
+// - Shared writes: the full BNxBK Bs tile is always written (valid lanes
+//   staged, invalid lanes zero-filled); As/Cr/Sr identical to exact path.
+//   No OOB shared access.
+// - ldmatrix: same swizzled in-tile pattern; invalid-row fragments load
+//   deterministic zeros.
+// - MMA: BF16 +0.0 lanes contribute exact +0.0; valid-lane accumulators are
+//   separate registers per ni, so valid results are bit-identical to a
+//   full-tile computation over the same valid inputs.
+// - Epilogue: each of the 4 stores guarded by c<T. Invalid lanes write
+//   nothing: no OOB output, no model-state change. Output shape exactly T.
+// - Barriers: unconditional (loop bounds are compile-time constants;
+//   n_valid affects DATA only, never barrier participation).
+// - Model semantics: only the linear execution tile is zero-padded;
+//   attention/GDN/state still see the real T. No silent sequence padding.
+__global__ __launch_bounds__(SyncCfg::THREADS) void t2_prefill_mma_sync_mt_kernel(
+    const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
+    const std::uint16_t* __restrict__ scales, __nv_bfloat16* __restrict__ out, std::int32_t n,
+    std::int32_t k, std::int32_t t) {
+    constexpr int BM = SyncCfg::BM;
+    constexpr int BN = SyncCfg::BN;
+    constexpr int BK = SyncCfg::BK;
+    constexpr int WM = SyncCfg::WM;
+    constexpr int WN = SyncCfg::WN;
+    constexpr int MT = SyncCfg::MT;
+    constexpr int NT = SyncCfg::NT;
+    constexpr int KSUB = SyncCfg::KSUB;
+
+    __shared__ __align__(16) __nv_bfloat16 As[BM * BK];
+    __shared__ __align__(16) __nv_bfloat16 Bs[BN * BK];
+    __shared__ __align__(16) std::uint8_t Cr[BM * BK / 4];
+    __shared__ __align__(16) std::uint16_t Sr[BM];
+
+    const int tid  = static_cast<int>(threadIdx.x);
+    const int warp = tid >> 5;
+    const int lane = tid & 31;
+    const int wm   = warp / SyncCfg::WARPS_N;
+    const int wn   = warp % SyncCfg::WARPS_N;
+    const int gid  = lane >> 2;
+    const int lid  = lane & 3;
+
+    const int m0 = static_cast<int>(blockIdx.x) * BM;
+    const int n0 = static_cast<int>(blockIdx.y) * BN;
+    const int groups = k / 128;
+    // Grid guarantees n0 < t; per-lane guards below use (t, n0) directly.
+
+    float acc[MT][NT][4];
+#pragma unroll
+    for (int mi = 0; mi < MT; ++mi) {
+#pragma unroll
+        for (int ni = 0; ni < NT; ++ni) {
+            acc[mi][ni][0] = 0.0f;
+            acc[mi][ni][1] = 0.0f;
+            acc[mi][ni][2] = 0.0f;
+            acc[mi][ni][3] = 0.0f;
+        }
+    }
+
+    const int a_mat    = lane >> 3;
+    const int a_rin    = lane & 7;
+    const int a_rowoff = a_rin + ((a_mat & 1) << 3);
+    const int a_coloff = (a_mat >> 1) << 3;
+    const int b_rin    = lane & 7;
+    const int b_koff   = ((lane >> 3) & 1) << 3;
+    const uint4 kZero  = make_uint4(0u, 0u, 0u, 0u);
+
+    const int nkt = k / BK;
+    for (int kt = 0; kt < nkt; ++kt) {
+#pragma unroll 1
+        for (int item = tid; item < BM * 2; item += SyncCfg::THREADS) {
+            const int row  = item / 2;
+            const int half = item % 2;
+            const std::int64_t gi =
+                static_cast<std::int64_t>(m0 + row) * groups + kt;
+            const uint4 u = load_vec<uint4>(&codes[gi * 32 + half * 16]);
+            *reinterpret_cast<uint4*>(&Cr[row * 32 + half * 16]) = u;
+        }
+#pragma unroll 1
+        for (int item = tid; item < BM; item += SyncCfg::THREADS) {
+            const std::int64_t gi =
+                static_cast<std::int64_t>(m0 + item) * groups + kt;
+            Sr[item] = scales[gi];
+        }
+#pragma unroll 1
+        for (int item = tid; item < BN * (BK / 8); item += SyncCfg::THREADS) {
+            const int nl = item / (BK / 8);
+            const int k8 = item - nl * (BK / 8);
+            const int kk = kt * BK + k8 * 8;
+            const int nn = n0 + nl;
+            uint4 u      = kZero;
+            if (nn < t) {
+                u = load_vec<uint4>(&x[static_cast<std::int64_t>(nn) * k + kk]);
+            }
+            *reinterpret_cast<uint4*>(&Bs[nl * BK + t2p_swz(nl, k8 * 8)]) = u;
+        }
+        __syncthreads();
+
+        for (int item = tid; item < BM * 8; item += SyncCfg::THREADS) {
+            const int row = item / 8;
+            const int wrd = item % 8;
+            const float scale = t2p_f16_to_float(Sr[row]);
+            const std::uint32_t u =
+                reinterpret_cast<const std::uint32_t*>(&Cr[row * 32])[wrd];
+            const int base = wrd * 16;
+#pragma unroll
+            for (int c = 0; c < 16; ++c) {
+                const int code = static_cast<int>((u >> (c * 2)) & 3u);
+                const float f  = static_cast<float>(code - 1) * scale;
+                As[row * BK + t2p_swz(row, base + c)] = __float2bfloat16_rn(f);
+            }
+        }
+        __syncthreads();
+
+        unsigned af[MT][4];
+        unsigned bf[NT][2];
+#pragma unroll 1
+        for (int ks = 0; ks < KSUB; ++ks) {
+#pragma unroll
+            for (int mi = 0; mi < MT; ++mi) {
+                const int ar = wm * WM + mi * 16 + a_rowoff;
+                const int ac = ks * 16 + a_coloff;
+                sync_ldmatrix_x4(af[mi][0], af[mi][1], af[mi][2], af[mi][3],
+                                 smem_addr(&As[ar * BK + t2p_swz(ar, ac)]));
+            }
+#pragma unroll
+            for (int ni = 0; ni < NT; ++ni) {
+                const int br = wn * WN + ni * 8 + b_rin;
+                const int bc = ks * 16 + b_koff;
+                sync_ldmatrix_x2(bf[ni][0], bf[ni][1],
+                                 smem_addr(&Bs[br * BK + t2p_swz(br, bc)]));
+            }
+            __syncthreads();
+#pragma unroll
+            for (int mi = 0; mi < MT; ++mi) {
+#pragma unroll
+                for (int ni = 0; ni < NT; ++ni) {
+                    sync_mma_bf16(acc[mi][ni][0], acc[mi][ni][1], acc[mi][ni][2],
+                                  acc[mi][ni][3], af[mi][0], af[mi][1], af[mi][2], af[mi][3],
+                                  bf[ni][0], bf[ni][1]);
+                }
+            }
+            __syncthreads();
+        }
+        __syncthreads();
+    }
+
+    // Epilogue with store masking: only c < t is written.
+    for (int mi = 0; mi < MT; ++mi) {
+        for (int ni = 0; ni < NT; ++ni) {
+            const int r0 = m0 + wm * WM + mi * 16 + gid;
+            const int r1 = r0 + 8;
+            const int c0 = n0 + wn * WN + ni * 8 + 2 * lid;
+            const int c1 = c0 + 1;
+            if (c0 < t) {
+                out[static_cast<std::int64_t>(c0) * n + r0] =
+                    __float2bfloat16_rn(acc[mi][ni][0]);
+                out[static_cast<std::int64_t>(c0) * n + r1] =
+                    __float2bfloat16_rn(acc[mi][ni][2]);
+            }
+            if (c1 < t) {
+                out[static_cast<std::int64_t>(c1) * n + r0] =
+                    __float2bfloat16_rn(acc[mi][ni][1]);
+                out[static_cast<std::int64_t>(c1) * n + r1] =
+                    __float2bfloat16_rn(acc[mi][ni][3]);
+            }
+        }
+    }
+}
+
+void launch_t2_prefill_mma_sync_mt(const Tensor& x, const Weight& w, Tensor& out,
+                                    cudaStream_t stream) {
+    const std::int32_t n = out.ne[0];
+    const std::int32_t k = x.ne[0];
+    const std::int32_t t = x.ne[1];
+    if (x.dtype != DType::BF16 || out.dtype != DType::BF16) {
+        throw std::invalid_argument("t2_prefill_mma_sync_mt: x/out must be BF16");
+    }
+    if (n <= 0 || (n % 64) != 0 || k <= 0 || (k % 128) != 0) {
+        throw std::invalid_argument("t2_prefill_mma_sync_mt: need N%64==0, K%128==0");
+    }
+    if (!x.is_contiguous() || !out.is_contiguous()) {
+        throw std::invalid_argument("t2_prefill_mma_sync_mt: x/out must be contiguous");
+    }
+    if (t < 9) {
+        throw std::invalid_argument("t2_prefill_mma_sync_mt: T must be >= 9");
+    }
+    const dim3 grid(static_cast<unsigned>((n + SyncCfg::BM - 1) / SyncCfg::BM),
+                    static_cast<unsigned>((t + SyncCfg::BN - 1) / SyncCfg::BN), 1u);
+    constexpr dim3 block(static_cast<unsigned>(SyncCfg::THREADS), 1u, 1u);
+    t2_prefill_mma_sync_mt_kernel<<<grid, block, 0u, stream>>>(
+        static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
+        static_cast<const std::uint16_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data), n, k,
+        t);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 // Serialized per-slab diagnostic (NOT a production candidate): computes ONLY
 // slab kt_sel's MMA contribution (FP32-accumulated single slab, RNE-stored
 // BF16 partial). Used to bisect fused-K-loop ownership: if every slab is
