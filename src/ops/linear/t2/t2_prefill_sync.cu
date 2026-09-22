@@ -77,22 +77,25 @@ __device__ __forceinline__ void sync_mma_bf16(float& c0, float& c1, float& c2, f
                  : "memory");
 }
 
-// P1-SYNC uses the 64x32 geometry for every supported T (T=32/64/128 via
-// grid.y token blocks; T=8 keeps the original 64x8 path).
+// P1-SYNC geometries: 64x32 for T>=32 (grid.y token blocks), 64x8 for T=8.
+// The kernel is templated on the schedule; both share the synchronous
+// ownership model (see header proof).
 using SyncCfg = T2PrefillMmaSchedule<64, 32, 16>;
+using Sync8Cfg = T2PrefillMmaSchedule<64, 8, 8>;
 
-__global__ __launch_bounds__(SyncCfg::THREADS) void t2_prefill_mma_sync_kernel(
+template <class Cfg>
+__global__ __launch_bounds__(Cfg::THREADS) void t2_prefill_mma_sync_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint16_t* __restrict__ scales, __nv_bfloat16* __restrict__ out, std::int32_t n,
     std::int32_t k, std::int32_t t, std::int32_t kt_sel) {
-    constexpr int BM = SyncCfg::BM;
-    constexpr int BN = SyncCfg::BN;
-    constexpr int BK = SyncCfg::BK;
-    constexpr int WM = SyncCfg::WM;
-    constexpr int WN = SyncCfg::WN;
-    constexpr int MT = SyncCfg::MT;
-    constexpr int NT = SyncCfg::NT;
-    constexpr int KSUB = SyncCfg::KSUB;
+    constexpr int BM = Cfg::BM;
+    constexpr int BN = Cfg::BN;
+    constexpr int BK = Cfg::BK;
+    constexpr int WM = Cfg::WM;
+    constexpr int WN = Cfg::WN;
+    constexpr int MT = Cfg::MT;
+    constexpr int NT = Cfg::NT;
+    constexpr int KSUB = Cfg::KSUB;
 
     __shared__ __align__(16) __nv_bfloat16 As[BM * BK];
     __shared__ __align__(16) __nv_bfloat16 Bs[BN * BK];
@@ -102,8 +105,8 @@ __global__ __launch_bounds__(SyncCfg::THREADS) void t2_prefill_mma_sync_kernel(
     const int tid  = static_cast<int>(threadIdx.x);
     const int warp = tid >> 5;
     const int lane = tid & 31;
-    const int wm   = warp / SyncCfg::WARPS_N;
-    const int wn   = warp % SyncCfg::WARPS_N;
+    const int wm   = warp / Cfg::WARPS_N;
+    const int wn   = warp % Cfg::WARPS_N;
     const int gid  = lane >> 2;
     const int lid  = lane & 3;
 
@@ -140,7 +143,7 @@ __global__ __launch_bounds__(SyncCfg::THREADS) void t2_prefill_mma_sync_kernel(
         // 1-3. Synchronous staging (plain loads + shared stores).
         // Codes: BM rows x 32B, cooperative 16B chunks.
 #pragma unroll 1
-        for (int item = tid; item < BM * 2; item += SyncCfg::THREADS) {
+        for (int item = tid; item < BM * 2; item += Cfg::THREADS) {
             const int row  = item / 2;
             const int half = item % 2;
             const std::int64_t gi =
@@ -150,14 +153,14 @@ __global__ __launch_bounds__(SyncCfg::THREADS) void t2_prefill_mma_sync_kernel(
         }
         // Scales: BM x F16, one per row per slab.
 #pragma unroll 1
-        for (int item = tid; item < BM; item += SyncCfg::THREADS) {
+        for (int item = tid; item < BM; item += Cfg::THREADS) {
             const std::int64_t gi =
                 static_cast<std::int64_t>(m0 + item) * groups + kt;
             Sr[item] = scales[gi];
         }
         // Activations: BN x BK BF16, 16B chunks.
 #pragma unroll 1
-        for (int item = tid; item < BN * (BK / 8); item += SyncCfg::THREADS) {
+        for (int item = tid; item < BN * (BK / 8); item += Cfg::THREADS) {
             const int nl = item / (BK / 8);
             const int k8 = item - nl * (BK / 8);
             const int kk = kt * BK + k8 * 8;
@@ -169,7 +172,7 @@ __global__ __launch_bounds__(SyncCfg::THREADS) void t2_prefill_mma_sync_kernel(
         __syncthreads();
 
         // 5. Decode current weight tile into As (swizzled BF16).
-        for (int item = tid; item < BM * 8; item += SyncCfg::THREADS) {
+        for (int item = tid; item < BM * 8; item += Cfg::THREADS) {
             const int row = item / 8;
             const int wrd = item % 8;
             const float scale = t2p_f16_to_float(Sr[row]);
@@ -267,7 +270,34 @@ void launch_t2_prefill_mma_sync(const Tensor& x, const Weight& w, Tensor& out,
     const dim3 grid(static_cast<unsigned>((n + SyncCfg::BM - 1) / SyncCfg::BM),
                     static_cast<unsigned>((t + SyncCfg::BN - 1) / SyncCfg::BN), 1u);
     constexpr dim3 block(static_cast<unsigned>(SyncCfg::THREADS), 1u, 1u);
-    t2_prefill_mma_sync_kernel<<<grid, block, 0u, stream>>>(
+    t2_prefill_mma_sync_kernel<SyncCfg><<<grid, block, 0u, stream>>>(
+        static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
+        static_cast<const std::uint16_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data), n, k,
+        t, -1);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+// P1-SYNC-8: synchronous 64x8 path for T=8 (same ownership model as the
+// 64x32 path; replaces the deprecated async prototype in dispatch).
+void launch_t2_prefill_mma_sync8(const Tensor& x, const Weight& w, Tensor& out,
+                                  cudaStream_t stream) {
+    const std::int32_t n = out.ne[0];
+    const std::int32_t k = x.ne[0];
+    const std::int32_t t = x.ne[1];
+    if (x.dtype != DType::BF16 || out.dtype != DType::BF16) {
+        throw std::invalid_argument("t2_prefill_mma_sync8: x/out must be BF16");
+    }
+    if (n <= 0 || (n % 64) != 0 || k <= 0 || (k % 128) != 0) {
+        throw std::invalid_argument("t2_prefill_mma_sync8: need N%64==0, K%128==0");
+    }
+    if (!x.is_contiguous() || !out.is_contiguous()) {
+        throw std::invalid_argument("t2_prefill_mma_sync8: x/out must be contiguous");
+    }
+    if (t != 8) { throw std::invalid_argument("t2_prefill_mma_sync8: T must be 8"); }
+    const dim3 grid(static_cast<unsigned>((n + Sync8Cfg::BM - 1) / Sync8Cfg::BM),
+                    static_cast<unsigned>((t + Sync8Cfg::BN - 1) / Sync8Cfg::BN), 1u);
+    constexpr dim3 block(static_cast<unsigned>(Sync8Cfg::THREADS), 1u, 1u);
+    t2_prefill_mma_sync_kernel<Sync8Cfg><<<grid, block, 0u, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
         static_cast<const std::uint16_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data), n, k,
         t, -1);
@@ -302,7 +332,7 @@ void launch_t2_prefill_mma_sync_slab(const Tensor& x, const Weight& w, Tensor& o
     const dim3 grid(static_cast<unsigned>((n + SyncCfg::BM - 1) / SyncCfg::BM),
                     static_cast<unsigned>((t + SyncCfg::BN - 1) / SyncCfg::BN), 1u);
     constexpr dim3 block(static_cast<unsigned>(SyncCfg::THREADS), 1u, 1u);
-    t2_prefill_mma_sync_kernel<<<grid, block, 0u, stream>>>(
+    t2_prefill_mma_sync_kernel<SyncCfg><<<grid, block, 0u, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
         static_cast<const std::uint16_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data), n, k,
         t, kt_sel);

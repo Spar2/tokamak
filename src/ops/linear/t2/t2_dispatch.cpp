@@ -27,8 +27,7 @@ bool t2_prefill_p1_applies(std::int32_t n, std::int32_t k, std::int32_t t) {
     if (!t2_prefill_p1_enabled()) { return false; }
     // Exact-tile scratch routing (init contract: persistent no-churn buffers
     // + mode-E warmup at startup; see M7-P1 determinism report).
-    // T=8 -> async 64x8 prototype path (proven); T=32/64/128 -> P1-SYNC
-    // fused deterministic path. All other T keep the legacy path.
+    // T=8 -> P1-SYNC-8; T=32/64/128 -> P1-SYNC. All other T keep legacy.
     if (t != 8 && t != 32 && t != 64 && t != 128) { return false; }
     if (n <= 0 || (n % 64) != 0 || k <= 0 || (k % 128) != 0) { return false; }
     return true;
@@ -57,7 +56,7 @@ T2Launch select_t2_launch(std::int32_t n, std::int32_t k, std::int32_t t, Linear
     // T=32/64/128 route to P1-SYNC; everything else keeps legacy.
     if (t == 1) { return launch_t2_gemv_t1a; }
     if (t2_prefill_p1_applies(n, k, t)) {
-        return (t == 8) ? launch_t2_prefill_mma : launch_t2_prefill_mma_sync;
+        return (t == 8) ? launch_t2_prefill_mma_sync8 : launch_t2_prefill_mma_sync;
     }
     if (t <= 32) { return launch_t2_row_persistent; }
     return launch_t2_chunked;
@@ -66,7 +65,7 @@ T2Launch select_t2_launch(std::int32_t n, std::int32_t k, std::int32_t t, Linear
 void t2_dispatch(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy policy,
                  cudaStream_t stream) {
     const T2Launch launch = select_t2_launch(w.n, w.k, x.ne[1], policy);
-    if (launch == launch_t2_prefill_mma || launch == launch_t2_prefill_mma_sync) {
+    if (launch == launch_t2_prefill_mma_sync8 || launch == launch_t2_prefill_mma_sync) {
         // Prototype requirements beyond (N,K,T): BF16 contiguous I/O.
         // Guard here and fall back silently so an unexpected layout can
         // never throw into the model; routing tests assert selection

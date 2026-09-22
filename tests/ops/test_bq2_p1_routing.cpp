@@ -1,5 +1,5 @@
 // M7-P1 scratch dispatch routing test.
-// Proves select_t2_launch routes T=8 to the async P1 path and T=32/64/128
+// Proves select_t2_launch routes T=8 to P1-SYNC-8 and T=32/64/128
 // to P1-SYNC iff the NINFER_T2_PREFILL_P1=1 env gate is on; every other T
 // keeps the legacy path. Live smoke (needs NINFER_BQ2_FULL_ART) proves
 // t2_dispatch engagement via stats counters; numeric equality dispatch-vs-
@@ -57,7 +57,7 @@ int main() {
     check_select(true, 1, launch_t2_gemv_t1a, "t1a");
     check_select(true, 2, launch_t2_row_persistent, "row-persistent");
     check_select(true, 7, launch_t2_row_persistent, "row-persistent");
-    check_select(true, 8, launch_t2_prefill_mma, "prefill-mma");
+    check_select(true, 8, launch_t2_prefill_mma_sync8, "prefill-sync8");
     check_select(true, 31, launch_t2_row_persistent, "row-persistent");
     check_select(true, 32, launch_t2_prefill_mma_sync, "prefill-sync");
     check_select(true, 33, launch_t2_chunked, "chunked");
@@ -95,7 +95,7 @@ int main() {
         cudaStream_t stream   = model.stream;
         const Weight& w       = model.gdn[8].fg; // T2 [17408,5120]
         auto run_case = [&](int T, int expect_p1) {
-            // expect_p1: 0=legacy, 1=async P1 (T8), 2=P1-SYNC.
+            // expect_p1: 0=legacy, 1=P1-SYNC-8 (T8), 2=P1-SYNC.
             bq2full::DeviceBuffer dx(5120 * T * 2), dy0(17408 * T * 2), dy1(17408 * T * 2);
             dx.fill(0);
             device.synchronize();
@@ -118,8 +118,8 @@ int main() {
             // Churn-hazard discipline: warmup launches (discarded) before
             // any trusted comparison on fresh buffers.
             if (expect_p1 == 1) {
-                launch_t2_prefill_mma(x, w, y0, stream);
-                launch_t2_prefill_mma(x, w, y0, stream);
+                launch_t2_prefill_mma_sync8(x, w, y0, stream);
+                launch_t2_prefill_mma_sync8(x, w, y0, stream);
             } else if (expect_p1 == 2) {
                 launch_t2_prefill_mma_sync(x, w, y0, stream);
                 launch_t2_prefill_mma_sync(x, w, y0, stream);
@@ -131,7 +131,7 @@ int main() {
             if (expect_p1 != 0) {
                 CHECK(p1b == p1a + 1 && fbb == fba, "T=%d must count one P1 launch", T);
                 if (expect_p1 == 1) {
-                    launch_t2_prefill_mma(x, w, y1, stream);
+                    launch_t2_prefill_mma_sync8(x, w, y1, stream);
                 } else {
                     launch_t2_prefill_mma_sync(x, w, y1, stream);
                 }

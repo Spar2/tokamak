@@ -103,7 +103,7 @@ int main() {
         for (int fi = 0; fi < 3; ++fi) {
             const Fam& fm = fams[fi];
             const Weight& w = ws[fi];
-            for (int T : {32, 64, 128}) {
+            for (int T : {8, 32, 64, 128}) {
                 const std::size_t n_el = static_cast<std::size_t>(fm.rows) * T;
                 bq2full::DeviceBuffer dx(fm.cols * T * 2), dy0(n_el * 2), dy1(n_el * 2);
                 // Token-distinct deterministic input (explicit c-dependence;
@@ -119,11 +119,20 @@ int main() {
                 const Tensor x(dx.p, DType::BF16, {fm.cols, T});
                 Tensor y0(dy0.p, DType::BF16, {fm.rows, T});
                 Tensor y1(dy1.p, DType::BF16, {fm.rows, T});
+                // T=8 uses the synchronous 64x8 schedule; larger exact
+                // tiles use the 64x32 schedule.
+                auto sync_launch = [&](const Tensor& xa, const Weight& wa, Tensor& ya) {
+                    if (T == 8) {
+                        launch_t2_prefill_mma_sync8(xa, wa, ya, stream);
+                    } else {
+                        launch_t2_prefill_mma_sync(xa, wa, ya, stream);
+                    }
+                };
                 std::printf("== %s T=%d ==\n", fm.name, T);
                 // 1. 50-run determinism vs run0.
                 std::vector<std::uint16_t> ref(n_el);
                 {
-                    launch_t2_prefill_mma_sync(x, w, y0, stream);
+                    sync_launch(x, w, y0);
                     device.synchronize();
                     CUDA_CHECK(
                         cudaMemcpy(ref.data(), dy0.p, ref.size() * 2, cudaMemcpyDeviceToHost));
@@ -133,7 +142,7 @@ int main() {
                 worst.n = n_el;
                 std::vector<std::uint16_t> got(n_el);
                 for (int r = 1; r < 50; ++r) {
-                    launch_t2_prefill_mma_sync(x, w, y1, stream);
+                    sync_launch(x, w, y1);
                     device.synchronize();
                     CUDA_CHECK(
                         cudaMemcpy(got.data(), dy1.p, got.size() * 2, cudaMemcpyDeviceToHost));
@@ -209,7 +218,7 @@ int main() {
                     for (int i = 0; i < 3; ++i) {
                         ops::linear(x, w, y0, stream);
                         launch_t2_prefill_mma(x, w, y0, stream);
-                        launch_t2_prefill_mma_sync(x, w, y0, stream);
+                        sync_launch(x, w, y0);
                     }
                     device.synchronize();
                     std::vector<double> d0, d1, d2;
@@ -247,7 +256,7 @@ int main() {
                         {
                             auto [e0, e1] = tick();
                             CUDA_CHECK(cudaEventRecord(e0, stream));
-                            launch_t2_prefill_mma_sync(x, w, y0, stream);
+                            sync_launch(x, w, y0);
                             CUDA_CHECK(cudaEventRecord(e1, stream));
                             CUDA_CHECK(cudaEventSynchronize(e1));
                             float ms = 0;

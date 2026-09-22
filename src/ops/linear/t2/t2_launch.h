@@ -29,6 +29,9 @@ void launch_t2_prefill_mma_64x64(const Tensor& x, const Weight& w, Tensor& out,
 // determinism gate) by scratch large-T dispatch.
 void launch_t2_prefill_mma_sync(const Tensor& x, const Weight& w, Tensor& out,
                                  cudaStream_t stream);
+// P1-SYNC-8: synchronous 64x8 path for T=8 (replaces async in dispatch).
+void launch_t2_prefill_mma_sync8(const Tensor& x, const Weight& w, Tensor& out,
+                                  cudaStream_t stream);
 // Serialized per-slab diagnostic (NOT production): single-slab partial.
 void launch_t2_prefill_mma_sync_slab(const Tensor& x, const Weight& w, Tensor& out,
                                       cudaStream_t stream, std::int32_t kt_sel);
