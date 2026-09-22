@@ -329,6 +329,12 @@ ninfer_add_op_test(ninfer_bq2_p1_routing_test
 ninfer_add_op_test(ninfer_bq2_p1sync_test
   SOURCES ops/test_bq2_p1sync.cpp
   LIBRARIES ninfer_ops ninfer_artifact)
+ninfer_add_op_test(ninfer_bq2_mindet_test
+  SOURCES ops/test_bq2_mindet.cpp
+  LIBRARIES ninfer_ops)
+ninfer_add_op_test(ninfer_bq2_mindet_art_test
+  SOURCES ops/test_bq2_mindet_art.cpp
+  LIBRARIES ninfer_ops ninfer_artifact)
 ninfer_add_op_test(ninfer_context_kv_materialize_test
   SOURCES ops/test_context_kv_materialize.cpp
   LIBRARIES ninfer_ops)
