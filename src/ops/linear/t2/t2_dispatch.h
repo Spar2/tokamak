@@ -13,8 +13,9 @@ void t2_dispatch(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy pol
                  cudaStream_t stream);
 
 // M7-P1 scratch integration (reversible, env-gated):
-//   NINFER_T2_PREFILL_P1=1 routes exact tiles (N%64==0, K%128==0) to P1-SYNC:
-//   T=8 -> P1-SYNC-8; T=32/64/128 -> P1-SYNC (all fully synchronous).
+//   NINFER_T2_PREFILL_P1=1 routes all T>=8 (N%64==0, K%128==0) to sync P1:
+//   T=8 -> P1-SYNC-8; exact T=32/64/128 -> P1-SYNC; other T>=9 (tails) ->
+//   masked P1-SYNC. T<=7 keep legacy row-persistent/chunked.
 //   Every other T keeps the existing row-persistent/chunked path.
 //   Init contract (churn hazard): persistent no-churn T2 buffers + mode-E
 //   (sync + sacrificial stateless T2 warmup + sync) at startup; serving

@@ -25,10 +25,12 @@ bool t2_prefill_p1_enabled() {
 
 bool t2_prefill_p1_applies(std::int32_t n, std::int32_t k, std::int32_t t) {
     if (!t2_prefill_p1_enabled()) { return false; }
-    // Exact-tile scratch routing (init contract: persistent no-churn buffers
-    // + mode-E warmup at startup; see M7-P1 determinism report).
-    // T=8 -> P1-SYNC-8; T=32/64/128 -> P1-SYNC. All other T keep legacy.
-    if (t != 8 && t != 32 && t != 64 && t != 128) { return false; }
+    // Final sync-P1 dispatch (measured crossover: masked P1 beats legacy at
+    // every T>=8, min 2.7x at fg-T9; init contract: persistent no-churn
+    // buffers + mode-E warmup at startup).
+    // T=8 -> P1-SYNC-8; exact T=32/64/128 -> P1-SYNC; other T>=9 (tails)
+    // -> masked P1-SYNC. T<=7 keep legacy.
+    if (t < 8) { return false; }
     if (n <= 0 || (n % 64) != 0 || k <= 0 || (k % 128) != 0) { return false; }
     return true;
 }
@@ -49,14 +51,13 @@ T2Launch select_t2_launch(std::int32_t n, std::int32_t k, std::int32_t t, Linear
     case LinearPolicy::AllowA4:
         throw std::invalid_argument("t2 linear: unsupported policy");
     }
-    // M5-minimal routing (measured on ffn_gate-class geometry; refine per-shape later):
-    // T=1 decode GEMV, 2..32 row-persistent, >32 chunked fallback.
-    // T1-A (widened unpack, bit-identical FP order) serves T=1.
-    // M7-P1 scratch (see applies()): T=8 routes to the async 64x8 prototype,
-    // T=32/64/128 route to P1-SYNC; everything else keeps legacy.
+    // M7-P1 final dispatch: T=1 T1-A; T=2..7 legacy row-persistent;
+    // T>=8 synchronous P1 (T=8 sync8, exact 32/64/128 sync32, tails masked).
     if (t == 1) { return launch_t2_gemv_t1a; }
     if (t2_prefill_p1_applies(n, k, t)) {
-        return (t == 8) ? launch_t2_prefill_mma_sync8 : launch_t2_prefill_mma_sync;
+        if (t == 8) { return launch_t2_prefill_mma_sync8; }
+        if (t == 32 || t == 64 || t == 128) { return launch_t2_prefill_mma_sync; }
+        return launch_t2_prefill_mma_sync_mt;
     }
     if (t <= 32) { return launch_t2_row_persistent; }
     return launch_t2_chunked;
@@ -65,7 +66,8 @@ T2Launch select_t2_launch(std::int32_t n, std::int32_t k, std::int32_t t, Linear
 void t2_dispatch(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy policy,
                  cudaStream_t stream) {
     const T2Launch launch = select_t2_launch(w.n, w.k, x.ne[1], policy);
-    if (launch == launch_t2_prefill_mma_sync8 || launch == launch_t2_prefill_mma_sync) {
+    if (launch == launch_t2_prefill_mma_sync8 || launch == launch_t2_prefill_mma_sync ||
+        launch == launch_t2_prefill_mma_sync_mt) {
         // Prototype requirements beyond (N,K,T): BF16 contiguous I/O.
         // Guard here and fall back silently so an unexpected layout can
         // never throw into the model; routing tests assert selection

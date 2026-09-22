@@ -51,16 +51,24 @@ int main() {
     }
     CHECK(!t2_prefill_p1_applies(17408, 5120, 8), "applies must be false with gate off");
 
-    // ---- pure selection, gate ON: T=8 async P1, T=32/64/128 P1-SYNC ----
+    // ---- pure selection, gate ON: T=8 sync8, T=32/64/128 sync32,
+    // other T>=9 masked tails ----
     setenv("NINFER_T2_PREFILL_P1", "1", 1);
     CHECK(t2_prefill_p1_enabled(), "gate should be on");
     check_select(true, 1, launch_t2_gemv_t1a, "t1a");
     check_select(true, 2, launch_t2_row_persistent, "row-persistent");
     check_select(true, 7, launch_t2_row_persistent, "row-persistent");
     check_select(true, 8, launch_t2_prefill_mma_sync8, "prefill-sync8");
-    check_select(true, 31, launch_t2_row_persistent, "row-persistent");
+    check_select(true, 9, launch_t2_prefill_mma_sync_mt, "prefill-sync-mt");
+    check_select(true, 15, launch_t2_prefill_mma_sync_mt, "prefill-sync-mt");
+    check_select(true, 16, launch_t2_prefill_mma_sync_mt, "prefill-sync-mt");
+    check_select(true, 24, launch_t2_prefill_mma_sync_mt, "prefill-sync-mt");
+    check_select(true, 31, launch_t2_prefill_mma_sync_mt, "prefill-sync-mt");
     check_select(true, 32, launch_t2_prefill_mma_sync, "prefill-sync");
-    check_select(true, 33, launch_t2_chunked, "chunked");
+    check_select(true, 33, launch_t2_prefill_mma_sync_mt, "prefill-sync-mt");
+    check_select(true, 47, launch_t2_prefill_mma_sync_mt, "prefill-sync-mt");
+    check_select(true, 48, launch_t2_prefill_mma_sync_mt, "prefill-sync-mt");
+    check_select(true, 63, launch_t2_prefill_mma_sync_mt, "prefill-sync-mt");
     check_select(true, 64, launch_t2_prefill_mma_sync, "prefill-sync");
     check_select(true, 128, launch_t2_prefill_mma_sync, "prefill-sync");
     // Shape guard: odd N never routes to P1 even at supported T (legacy);
@@ -75,10 +83,11 @@ int main() {
         CHECK(threw, "K%128!=0 must throw (pre-existing validation)");
     }
     CHECK(t2_prefill_p1_applies(17408, 5120, 8), "applies(fg,8) must be true");
+    CHECK(t2_prefill_p1_applies(17408, 5120, 9), "applies(fg,9) must be true");
     CHECK(t2_prefill_p1_applies(17408, 5120, 32), "applies(fg,32) must be true");
+    CHECK(t2_prefill_p1_applies(17408, 5120, 33), "applies(fg,33) must be true");
     CHECK(t2_prefill_p1_applies(17408, 5120, 64), "applies(fg,64) must be true");
     CHECK(t2_prefill_p1_applies(17408, 5120, 128), "applies(fg,128) must be true");
-    CHECK(!t2_prefill_p1_applies(17408, 5120, 33), "applies(fg,33) must be false");
     CHECK(!t2_prefill_p1_applies(17408, 5120, 7), "applies(fg,7) must be false");
 
     const char* art_path = std::getenv("NINFER_BQ2_FULL_ART");
@@ -95,7 +104,7 @@ int main() {
         cudaStream_t stream   = model.stream;
         const Weight& w       = model.gdn[8].fg; // T2 [17408,5120]
         auto run_case = [&](int T, int expect_p1) {
-            // expect_p1: 0=legacy, 1=P1-SYNC-8 (T8), 2=P1-SYNC.
+            // expect_p1: 0=legacy, 1=P1-SYNC-8 (T8), 2=P1-SYNC, 3=masked.
             bq2full::DeviceBuffer dx(5120 * T * 2), dy0(17408 * T * 2), dy1(17408 * T * 2);
             dx.fill(0);
             device.synchronize();
@@ -123,6 +132,9 @@ int main() {
             } else if (expect_p1 == 2) {
                 launch_t2_prefill_mma_sync(x, w, y0, stream);
                 launch_t2_prefill_mma_sync(x, w, y0, stream);
+            } else if (expect_p1 == 3) {
+                launch_t2_prefill_mma_sync_mt(x, w, y0, stream);
+                launch_t2_prefill_mma_sync_mt(x, w, y0, stream);
             }
             device.synchronize();
             t2_prefill_p1_stats(p1a, fba);
@@ -132,8 +144,10 @@ int main() {
                 CHECK(p1b == p1a + 1 && fbb == fba, "T=%d must count one P1 launch", T);
                 if (expect_p1 == 1) {
                     launch_t2_prefill_mma_sync8(x, w, y1, stream);
-                } else {
+                } else if (expect_p1 == 2) {
                     launch_t2_prefill_mma_sync(x, w, y1, stream);
+                } else {
+                    launch_t2_prefill_mma_sync_mt(x, w, y1, stream);
                 }
                 device.synchronize();
                 std::vector<std::uint16_t> b0(17408 * T), b1(17408 * T);
@@ -165,8 +179,8 @@ int main() {
                         (o2 > 0 && r2 > 0) ? d / std::sqrt(o2 * r2) : 0.0;
                     CHECK(mx <= 1e-3 && cos >= 0.99999,
                           "T=%d sync dispatch-vs-direct maxabs=%.6f cos=%.8f", T, mx, cos);
-                    std::printf("  live T=%-4d P1-SYNC routed (maxabs=%.6f cos=%.8f)\n",
-                                T, mx, cos);
+                    std::printf("  live T=%-4d %s routed (maxabs=%.6f cos=%.8f)\n", T,
+                                expect_p1 == 2 ? "P1-SYNC" : "masked", mx, cos);
                 }
             } else {
                 CHECK(p1b == p1a && fbb == fba, "T=%d must not touch P1 counters", T);
@@ -177,8 +191,9 @@ int main() {
         run_case(32, 2);
         run_case(64, 2);
         run_case(128, 2);
-        run_case(33, 0);
-        run_case(31, 0);
+        run_case(31, 3);
+        run_case(33, 3);
+        run_case(16, 3);
         run_case(7, 0);
         run_case(2, 0);
         // T=1 legacy is T1-A, not row-persistent.
