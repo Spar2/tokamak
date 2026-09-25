@@ -203,6 +203,8 @@ add_library(ninfer_ops STATIC
   ops/linear/t2/t2_rowsplit_gemv.cu
   ops/linear/t2/t2_rowsplit_smallt.cu
   ops/linear/t2/t2_fwht.cu
+  ops/linear/t2/t2_prefill_mma.cu
+  ops/linear/t2/t2_prefill_sync.cu
   ops/linear/t2/t2_dispatch.cpp
   ops/linear/q5/q5_dispatch.cpp
   ops/linear/q5/q5_rowsplit_gemm_mma.cu

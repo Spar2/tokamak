@@ -258,6 +258,192 @@ int main() {
                         med(dc), med(dc) / med(dw));
         }
 
+        // ---- M7-P1: tiled BF16-MMA prototype vs production ----
+        // Representative shapes x T in {8,32,128}. Production baseline is
+        // the CURRENT dispatch (row-persistent/chunked), never T1-A.
+        {
+            struct PF {
+                const char* name;
+                Weight w;
+                const char* art;
+                int rows, cols;
+            };
+            const PF pfs[] = {
+                {"fg", model.gdn[8].fg, "text/layers/8/ffn_gate", 17408, 5120},
+                {"fd", model.gdn[8].fd, "text/layers/8/ffn_down", 5120, 17408},
+                {"qkv", model.gdn[8].qkv, "text/layers/8/attn_qkv", 10240, 5120},
+            };
+            // B3 crossover tails: T=7/31/33 run production only (the
+            // prototype supports exact tiles; it must reject tails cleanly
+            // so future dispatch can fall back safely).
+            for (int T : {7, 8, 31, 32, 33, 64, 128}) {
+                for (const auto& pf : pfs) {
+                    DeviceBuffer dx(pf.cols * T * 2), dy0(pf.rows * T * 2),
+                        dy1(pf.rows * T * 2);
+                    {
+                        std::vector<std::uint16_t> bits(pf.cols * T);
+                        for (std::size_t i = 0; i < bits.size(); ++i) {
+                            bits[i] = (std::uint16_t)(0x3C00 + (i % 64));
+                        }
+                        dx.copy_from_host(bits.data(), bits.size() * 2);
+                    }
+                    const Tensor x(dx.p, DType::BF16, {pf.cols, T});
+                    Tensor y0(dy0.p, DType::BF16, {pf.rows, T});
+                    Tensor y1(dy1.p, DType::BF16, {pf.rows, T});
+                    M7Timer t;
+                    std::vector<double> d0, d1;
+                    const bool proto_ok = (T == 8 || T == 32 || T == 64 || T == 128);
+                    for (int i = 0; i < 3; ++i) {
+                        ops::linear(x, pf.w, y0, stream);
+                        if (proto_ok) {
+                            ops::detail::launch_t2_prefill_mma(x, pf.w, y1, stream);
+                        }
+                    }
+                    device.synchronize();
+                    for (int i = 0; i < 10; ++i) {
+                        t.start(stream);
+                        ops::linear(x, pf.w, y0, stream);
+                        d0.push_back(t.stop_ms(stream));
+                    }
+                    if (proto_ok) {
+                        for (int i = 0; i < 10; ++i) {
+                            t.start(stream);
+                            ops::detail::launch_t2_prefill_mma(x, pf.w, y1, stream);
+                            d1.push_back(t.stop_ms(stream));
+                        }
+                    }
+                    const double m0 = med(d0), m1 = proto_ok ? med(d1) : -1.0;
+                    // B2 tile probes on fg (largest family): BM=128 and
+                    // BN=64 (T=64/128 only) vs default 64x32.
+                    double m128 = -1.0, m64 = -1.0;
+                    if (pf.rows == 17408 && (T == 32 || T == 64 || T == 128)) {
+                        DeviceBuffer dy2(pf.rows * T * 2);
+                        Tensor y2(dy2.p, DType::BF16, {pf.rows, T});
+                        std::vector<double> d128;
+                        for (int i = 0; i < 3; ++i) {
+                            ops::detail::launch_t2_prefill_mma_128x32(x, pf.w, y2, stream);
+                        }
+                        device.synchronize();
+                        for (int i = 0; i < 10; ++i) {
+                            t.start(stream);
+                            ops::detail::launch_t2_prefill_mma_128x32(x, pf.w, y2, stream);
+                            d128.push_back(t.stop_ms(stream));
+                        }
+                        m128 = med(d128);
+                    }
+                    if (pf.rows == 17408 && (T == 64 || T == 128)) {
+                        DeviceBuffer dy3(pf.rows * T * 2);
+                        Tensor y3(dy3.p, DType::BF16, {pf.rows, T});
+                        std::vector<double> d64;
+                        for (int i = 0; i < 3; ++i) {
+                            ops::detail::launch_t2_prefill_mma_64x32(x, pf.w, y3, stream);
+                        }
+                        device.synchronize();
+                        for (int i = 0; i < 10; ++i) {
+                            t.start(stream);
+                            ops::detail::launch_t2_prefill_mma_64x32(x, pf.w, y3, stream);
+                            d64.push_back(t.stop_ms(stream));
+                        }
+                        m64 = med(d64);
+                    }
+                    if (!proto_ok) {
+                        // Tail case: production-only timing + prototype must
+                        // reject cleanly (safe fallback for future dispatch).
+                        std::printf("p1 %-4s T=%-4d base=%.4fms proto=N/A (tail: exact tiles only)\n",
+                                    pf.name, T, m0);
+                        DeviceBuffer dy4(pf.rows * T * 2);
+                        Tensor y4(dy4.p, DType::BF16, {pf.rows, T});
+                        DeviceBuffer dx7(pf.cols * T * 2);
+                        const Tensor x7(dx7.p, DType::BF16, {pf.cols, T});
+                        bool threw = false;
+                        try {
+                            ops::detail::launch_t2_prefill_mma(x7, pf.w, y4, stream);
+                        } catch (const std::invalid_argument&) { threw = true; }
+                        device.synchronize();
+                        std::printf("  tailcheck %-4s T=%-4d prototype throws=%s\n", pf.name, T,
+                                    threw ? "YES" : "NO");
+                        if (!threw) { ok = false; }
+                        continue;
+                    }
+                    std::vector<std::uint16_t> b0(pf.rows * T), b1(pf.rows * T);
+                    CUDA_CHECK(cudaMemcpy(b0.data(), dy0.p, b0.size() * 2,
+                                          cudaMemcpyDeviceToHost));
+                    CUDA_CHECK(cudaMemcpy(b1.data(), dy1.p, b1.size() * 2,
+                                          cudaMemcpyDeviceToHost));
+                    double mx = 0.0, se = 0.0, r2 = 0.0, dot = 0.0, o2 = 0.0;
+                    for (std::size_t i = 0; i < b0.size(); ++i) {
+                        const double a = bf16_to_f32(b0[i]);
+                        const double b = bf16_to_f32(b1[i]);
+                        const double e = std::fabs(a - b);
+                        if (e > mx) { mx = e; }
+                        se += e * e;
+                        r2 += b * b;
+                        dot += a * b;
+                        o2 += a * a;
+                    }
+                    const double rmse = std::sqrt(se / b0.size());
+                    const double cos =
+                        (o2 > 0.0 && r2 > 0.0) ? dot / std::sqrt(o2 * r2) : 0.0;
+                    // Traffic accounting (prototype): codes+scales staged
+                    // once per K-slab; activations staged once per CTA.
+                    const double wbytes = (double)pf.rows * (pf.cols / 128) * 34.0;
+                    const double abytes = (double)pf.cols * T * 2.0;
+                    const double obytes = (double)pf.rows * T * 2.0;
+                    if (m128 > 0) {
+                        std::printf("  tile128x32 fg T=%-4d med=%.4fms vs6464x32=%.4fms ratio=%.3f\n",
+                                    T, m128, m1, m1 / m128);
+                    }
+                    if (m64 > 0) {
+                        std::printf("  tile64x32ref  fg T=%-4d med=%.4fms vs64x32=%.4fms ratio=%.3f\n",
+                                    T, m64, m1, m1 / m64);
+                    }
+                    std::printf("p1 %-4s T=%-4d base=%.4fms proto=%.4fms speedup=%.3f "
+                                "delta-maxabs=%.6f delta-rmse=%.6f cos=%.8f "
+                                "wMB=%.1f aMB=%.1f oMB=%.1f\n",
+                                pf.name, T, m0, m1, m0 / m1, mx, rmse, cos,
+                                wbytes / 1e6, abytes / 1e6, obytes / 1e6);
+                    // FP64 oracle on subsampled rows (T<=32; T=128 fg only).
+                    if (T <= 64 || (T == 128 && pf.rows == 17408)) {
+                        const int RCHK = 256;
+                        const artifact::PayloadSpan span = model.reader.payload(pf.art);
+                        const std::uint8_t* ep =
+                            reinterpret_cast<const std::uint8_t*>(span.data.data());
+                        std::vector<float> xf(pf.cols * T);
+                        {
+                            std::vector<std::uint16_t> xb(pf.cols * T);
+                            CUDA_CHECK(cudaMemcpy(xb.data(), dx.p, xb.size() * 2,
+                                                  cudaMemcpyDeviceToHost));
+                            for (std::size_t i = 0; i < xb.size(); ++i) {
+                                xf[i] = bf16_to_f32(xb[i]);
+                            }
+                        }
+                        double omx = 0.0, ose = 0.0;
+                        for (int r = 0; r < RCHK; ++r) {
+                            const std::vector<double> wrow =
+                                t2_decode_rows(ep, pf.rows, r, r + 1, pf.cols);
+                            for (int t = 0; t < T; ++t) {
+                                double acc = 0.0;
+                                for (int k = 0; k < pf.cols; ++k) {
+                                    acc += wrow[k] *
+                                           xf[static_cast<std::size_t>(t) * pf.cols + k];
+                                }
+                                const double got = bf16_to_f32(
+                                    b1[static_cast<std::size_t>(t) * pf.rows + r]);
+                                const double e = std::fabs(got - acc);
+                                if (e > omx) { omx = e; }
+                                ose += e * e;
+                            }
+                        }
+                        const double ormse = std::sqrt(ose / (RCHK * T));
+                        std::printf("  oracle %-4s T=%-4d rows=%d maxabs=%.6f rmse=%.6f %s\n",
+                                    pf.name, T, RCHK, omx, ormse,
+                                    omx <= 1e-3 ? "PASS" : "FAIL");
+                        if (omx > 1e-3) { ok = false; }
+                    }
+                }
+            }
+        }
+
         std::printf("%s M7_MICRO\n", ok ? "OK" : "FAIL");
         return ok ? 0 : 1;
     } catch (const std::exception& error) {
