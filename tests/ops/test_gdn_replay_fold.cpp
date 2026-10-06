@@ -1,6 +1,7 @@
 #include "ninfer/ops/gated_delta_net.h"
 #include "ninfer/ops/gdn_input_proj.h"
 #include "ninfer/ops/gdn_replay.h"
+#include "ninfer/types.h"
 
 #include "core/gdn_replay_records.h"
 #include "core/layout.h"
@@ -29,7 +30,7 @@ namespace {
 
 constexpr std::int32_t kStateDim       = 128;
 constexpr std::int32_t kQkHeads        = 16;
-constexpr std::int32_t kRecordCapacity = 8;
+constexpr std::int32_t kRecordCapacity = kMaximumConcurrency;
 constexpr std::size_t kGuardBytes      = 256;
 
 std::uint32_t mix(std::uint32_t value) {
@@ -72,7 +73,7 @@ std::vector<float> initial_recurrent_values(std::size_t elements, std::uint32_t 
 
 std::vector<std::int32_t> selected_slots(std::int32_t rows) {
     if (rows == 1) { return {2}; }
-    std::vector<std::int32_t> slots{10, 2, 8, 0, 6, 4, 9, 1};
+    std::vector<std::int32_t> slots{10, 2, 8, 0, 6, 4, 9, 1, 5};
     slots.resize(static_cast<std::size_t>(rows));
     return slots;
 }
@@ -734,6 +735,7 @@ int main() {
     failures += run_case({48, 48, 10240}, 6, 8, {0, 1, 2, 3, 6, 4, 1, 5}, 1821U);
     failures += run_case({48, 48, 10240}, 7, 8, {7, 0, 1, 2, 3, 4, 5, 6}, 1823U, true);
     failures += run_case({48, 48, 10240}, 16, 8, {0, 1, 2, 3, 7, 13, 15, 16}, 1825U, true);
+    failures += run_case({48, 48, 10240}, 6, 9, {0, 1, 2, 3, 4, 5, 6, 1, 3}, 1826U);
     failures += run_case({48, 48, 10240}, 16, 1, {16}, 1827U, true);
     failures += run_case({48, 48, 10240}, 16, 1, {0}, 1829U, true);
     failures += run_case({30, 32, 8192}, 2, 1, {2}, 1831U);

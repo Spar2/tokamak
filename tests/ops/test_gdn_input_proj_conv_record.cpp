@@ -285,6 +285,7 @@ int run_q4_q5() {
     }
     failures += run(5, 3, {5, 3, 1}, 1491U);
     failures += run(4, 4, {4, 3, 2, 1}, 1492U);
+    failures += run(4, 9, ragged(4, 9), 1493U);
     failures += qk.verify_preserved("Q4 record qk weight");
     failures += value_z.verify_preserved("Q5 record value/z weight");
     return failures;
@@ -326,6 +327,7 @@ int run_w8() {
     failures += run(2, 1, {1}, 1511U);
     failures += run(16, 1, {}, 1521U);
     failures += run(16, 8, {16, 13, 9, 7, 5, 3, 2, 1}, 1531U);
+    failures += run(4, 9, ragged(4, 9), 1541U);
     failures += parent.verify_preserved("W8 record parent weight");
     return failures;
 }

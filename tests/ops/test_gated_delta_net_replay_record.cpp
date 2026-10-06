@@ -283,6 +283,7 @@ int main() {
         for (int b = 0; b < 8; ++b) valid[b] = b == 0 ? width : 1 + (3 * b) % width;
         failures += run_case(48, width, 8, valid, 1760U + width);
     }
+    failures += run_case(48, 6, 9, {6, 5, 4, 3, 2, 1, 6, 2, 5}, 1781U);
     failures += run_case(48, 5, 3, {5, 3, 1}, 1791U);
     std::cout << (failures == 0 ? "OK" : "FAIL") << " gated_delta_net_replay_record\n";
     return failures == 0 ? 0 : 1;

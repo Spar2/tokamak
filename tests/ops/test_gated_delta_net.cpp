@@ -475,6 +475,9 @@ int main() {
                                   8, 12201u);
     failures += batch_update_case({"35b ordinary", 16, 32, 1, true}, {8, 9, 10, 11, 12, 13, 14, 15},
                                   {8, 9, 10, 11, 12, 13, 14, 15}, 16, 13001u);
+    failures += batch_update_case({"35b ordinary C9", 16, 32, 1, true},
+                                  {8, 9, 10, 11, 12, 13, 14, 15, 16},
+                                  {8, 9, 10, 11, 12, 13, 14, 15, 16}, 17, 13009u);
     failures += batch_update_case({"35b mixed fork destinations", 16, 32, 1, true}, {0, 2, 4, 6},
                                   {1, 3, 5, 7}, 8, 13101u);
 

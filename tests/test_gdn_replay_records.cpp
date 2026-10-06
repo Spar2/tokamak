@@ -148,11 +148,23 @@ int main() {
                                           .value_dim       = 128}),
                             111083520, "30-layer T16 capacity");
 
+    ninfer::LayoutBuilder c9_builder;
+    const auto c9_layout = ninfer::plan_gdn_replay_records(
+        c9_builder, {.layers          = 1,
+                     .record_capacity = 9,
+                     .width           = 2,
+                     .conv_channels   = 1,
+                     .qk_heads        = 1,
+                     .value_heads     = 1,
+                     .key_dim         = 1,
+                     .value_dim       = 1});
+    failures += expect(c9_layout.spec.record_capacity == 9, "record capacity nine rejected");
+
     failures += expect_throw(
         [&] {
             ninfer::LayoutBuilder invalid;
             (void)ninfer::plan_gdn_replay_records(invalid, {.layers          = 1,
-                                                            .record_capacity = 9,
+                                                            .record_capacity = 10,
                                                             .width           = 2,
                                                             .conv_channels   = 1,
                                                             .qk_heads        = 1,
@@ -160,7 +172,7 @@ int main() {
                                                             .key_dim         = 1,
                                                             .value_dim       = 1});
         },
-        "record capacity above eight");
+        "record capacity above nine");
 
     ninfer::LayoutBuilder state_builder;
     const auto state_layout = ninfer::plan_linear_attention_state_pool(
