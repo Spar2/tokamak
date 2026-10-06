@@ -38,7 +38,7 @@ EngineOptions normalize_engine_options(EngineOptions options) {
         throw std::invalid_argument("Engine purpose is invalid");
     }
     if (options.max_concurrency == 0 || options.max_concurrency > kMaximumConcurrency) {
-        throw std::invalid_argument("Engine max_concurrency must be in [1,8]");
+        throw std::invalid_argument("Engine max_concurrency must be in [1,9]");
     }
 
     ContextCacheOptions& cache      = options.context_cache;

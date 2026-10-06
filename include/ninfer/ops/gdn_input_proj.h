@@ -81,7 +81,7 @@ void gdn_input_proj(const Tensor& x, const Weight& query_key_value_z_weight, Ten
 /**
  * Returns the transient capacity required by the registered two-parent Q4/Q5 or single-parent W8
  * snapshot profile. `batch_size` is exact and the query covers every W in the inclusive width
- * interval. B=1 preserves the format-specific fused/composed resolver. B=2..8 uses aggregate
+ * interval. B=1 preserves the format-specific fused/composed resolver. B=2..9 uses aggregate
  * projection plus one BF16 [C,B*W] projected plane. The query throws for an unregistered row
  * profile or unsupported B/W domain.
  */
@@ -112,7 +112,7 @@ void gdn_input_proj(const Tensor& x, const Weight& query_key_value_z_weight, Ten
  * Logical shapes:
  *   The 27B registered form has x [5120,W,B], Q4 q/k weight [4096,5120], one Q5 value/z parent
  *   [12288,5120], conv_weight [10240,4], conv_states [10240,3,Slots], query/key [2048,W,B],
- *   value/z [6144,W,B], and I32 selectors [B]. B=1 accepts every positive W; B=2..8 accepts
+ *   value/z [6144,W,B], and I32 selectors [B]. B=1 accepts every positive W; B=2..9 accepts
  *   W=1..16. `valid_columns` is empty for a dense invocation or I32 [B] for a mixed-width batch.
  *   A mixed-width invocation has B>=1 and every valid extent lies in [1,W].
  *
@@ -145,8 +145,9 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const Weight& qk_weight,
  * Single-parent form of gdn_input_proj_conv_snapshot. Registered parents are W8G32_F16S RowSplit
  * [12288,2048], NVFP4 BlockScaleK16M128x4 [16384,5120], and FP8_E4M3FN_ROW_BF16S RowScale
  * [16384,5120], all in q/k/value/z row order. W8 admits A16Only, NVFP4 admits A16Only/AllowA4,
- * and FP8 admits A16Only/AllowA8. B=1 accepts every positive W for FP8; the batched domain is
- * B=2..8 and W=1..16. For FP8 B=1, A16 is fused at W=1..3 and W=7..10 and materialized
+ * and FP8 admits A16Only/AllowA8. B=1 accepts every positive W for FP8; W8's batched domain is
+ * B=2..9 and W=1..16, while NVFP4/FP8 remain B=2..8. For FP8 B=1, A16 is fused at W=1..3
+ * and W=7..10 and materialized
  * otherwise; AllowA8 uses the same winners through W=9 and A8 from W=10. Batched AllowA8 uses A8
  * when B*W>=9. Tensor operands, the complete FP8 parent, and live workspace must be mutually
  * non-overlapping, except that the read-only initial_state_slots and snapshot_base_slots selectors
@@ -162,7 +163,7 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const Weight& query_key_value
 
 /**
  * Applies the A16-only single-parent form. FP8 accepts every positive W for dense B=1; the batched
- * domain is B=2..8 and W=1..16.
+ * W8's batched domain is B=2..9 and W=1..16; NVFP4/FP8 remain B=2..8 and W=1..16.
  */
 void gdn_input_proj_conv_snapshot(const Tensor& x, const Weight& query_key_value_z_weight,
                                   const Tensor& conv_weight, Tensor& conv_states,
@@ -173,7 +174,7 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const Weight& query_key_value
 
 /**
  * Returns the transient capacity for the registered Q4/Q5 or W8 record-producing profile.
- * `batch_size` is exact, and the inclusive T interval must lie within ReplaySSM's B=1..8,
+ * `batch_size` is exact, and the inclusive T interval must lie within ReplaySSM's B=1..9,
  * T=2..16 execution domain. These profiles require no transient storage because materialized
  * projection writes directly to caller-owned conv_record.
  */
@@ -199,7 +200,7 @@ void gdn_input_proj_conv_snapshot(const Tensor& x, const Weight& query_key_value
  * newest history column to conv_record [C,T,B]. Query, key,
  * and value are zero in each row's invalid tail; z is projected for every physical column.
  *
- * The execution domain is B=1..8 and T=2..16. valid_columns is empty for dense input or device
+ * The execution domain is B=1..9 and T=2..16. valid_columns is empty for dense input or device
  * I32 [B], with each caller-supplied extent in [1,T]. conv_states is a read-only BF16 [C,3,S]
  * state-pool view, and initial_state_slots contains absolute slots in [0,S). Source state is not
  * modified. Only the valid prefix of conv_record is semantically defined. Outputs and valid

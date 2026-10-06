@@ -31,7 +31,7 @@ replica 和 consumer view 的物理合同由 [Paged KV Context Store](paged-kv-c
 
 Prefix reuse 是 admission 的一种来源选择。它减少重复 prefill，但不改变模型语义、请求顺序或生成结果。
 
-当前产品条件为单 GPU、单 resident model、固定 `max_concurrency=1..8` 和非抢占 active requests。
+当前产品条件为单 GPU、单 resident model、固定 `max_concurrency=1..9` 和非抢占 active requests。
 由此得到两个基本规则：
 
 1. Scheduler 先确定本次尝试的 request，资源层只优化该 request 的 materialization；

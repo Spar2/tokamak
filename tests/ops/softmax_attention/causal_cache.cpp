@@ -2221,6 +2221,10 @@ int run_batch_cases() {
     }
     failures += run_batch_case(kGeometries[0], KvCacheStorage::Int8Group64,
                                {6, {127}, {3}, {0}, MappingPattern::Identity, 499u});
+    failures += run_batch_case(
+        kGeometries[0], KvCacheStorage::Int8Group64,
+        {6, {0, 17, 61, 127, 0, 31, 63, 95, 127}, {6, 5, 4, 3, 2, 1, 6, 4, 2},
+         {0, 1, 2, 3, 4, 5, 6, 7, 8}, MappingPattern::Fragmented, 509u, true});
     failures += run_batch_case(kGeometries[0], KvCacheStorage::BFloat16,
                                {16, {49}, {7}, {0}, MappingPattern::Identity, 500u});
     failures += run_batch_case(kGeometries[0], KvCacheStorage::BFloat16,

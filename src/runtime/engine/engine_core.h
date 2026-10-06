@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -1437,6 +1438,84 @@ private:
                                   request->publication_order);
     }
 
+    static const char* diagnostic_state_name(EngineRequestState state) noexcept {
+        switch (state) {
+        case EngineRequestState::Waiting: return "waiting";
+        case EngineRequestState::Materializing: return "materializing";
+        case EngineRequestState::Prefill: return "prefill";
+        case EngineRequestState::DecodeReady: return "decode-ready";
+        case EngineRequestState::ControlReady: return "control-ready";
+        case EngineRequestState::ModelFinished: return "finished";
+        }
+        return "unknown";
+    }
+
+    static const char* diagnostic_readiness_name(Readiness readiness) noexcept {
+        switch (readiness) {
+        case Readiness::Ready: return "ready";
+        case Readiness::NeedsTransfer: return "needs-transfer";
+        case Readiness::TemporarilyBlocked: return "temporarily-blocked";
+        case Readiness::PermanentlyInfeasible: return "permanently-infeasible";
+        }
+        return "unknown";
+    }
+
+    void diagnostic_trace_membership(const char* stage, const RoundMembership& membership) {
+        std::array<std::uint64_t, kMaximumConcurrency> ids{};
+        std::array<std::uint8_t, kMaximumConcurrency> states{};
+        std::array<bool, kMaximumConcurrency> captures{};
+        bool changed = membership.size != diagnostic_last_membership_size_;
+        for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
+            if (slots_[lane] != nullptr) {
+                ids[lane]      = slots_[lane]->id;
+                states[lane]   = static_cast<std::uint8_t>(slots_[lane]->model_state);
+                captures[lane] = slots_[lane]->capture_pending;
+            }
+            changed = changed || ids[lane] != diagnostic_last_ids_[lane] ||
+                      states[lane] != diagnostic_last_states_[lane] ||
+                      captures[lane] != diagnostic_last_captures_[lane];
+        }
+        if (!changed) { return; }
+        diagnostic_last_membership_size_ = membership.size;
+        diagnostic_last_ids_              = ids;
+        diagnostic_last_states_           = states;
+        diagnostic_last_captures_         = captures;
+        std::fprintf(stderr, "C9TRACE %s membership=%zu slots=", stage, membership.size);
+        for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
+            if (slots_[lane] == nullptr) {
+                std::fprintf(stderr, " %u:-", lane);
+            } else {
+                std::fprintf(stderr, " %u:%llu/%s%s", lane,
+                             static_cast<unsigned long long>(slots_[lane]->id),
+                             diagnostic_state_name(slots_[lane]->model_state),
+                             slots_[lane]->capture_pending ? "/capture" : "");
+            }
+        }
+        std::fprintf(stderr, " ready-lanes=");
+        for (std::size_t row = 0; row < membership.size; ++row) {
+            std::fprintf(stderr, "%s%u", row == 0 ? "" : ",", membership.lanes[row]);
+        }
+        std::fprintf(stderr, "\n");
+    }
+
+    void diagnostic_trace_admission(const std::shared_ptr<Request>& head,
+                                    Readiness readiness) {
+        std::uint32_t active = 0;
+        for (std::uint32_t lane = 0; lane < max_concurrency_; ++lane) {
+            active += slots_[lane] != nullptr ? 1U : 0U;
+        }
+        if (head->id == diagnostic_last_head_id_ && readiness == diagnostic_last_readiness_ &&
+            active == diagnostic_last_active_count_) {
+            return;
+        }
+        diagnostic_last_head_id_       = head->id;
+        diagnostic_last_readiness_     = readiness;
+        diagnostic_last_active_count_  = active;
+        std::fprintf(stderr, "C9TRACE admission head=%llu readiness=%s active=%u\n",
+                     static_cast<unsigned long long>(head->id),
+                     diagnostic_readiness_name(readiness), active);
+    }
+
     [[nodiscard]] AdmissionProgress remove_pending_error(const std::shared_ptr<Request>& request,
                                                          std::exception_ptr error) {
         if (!erase_pending(request)) { return AdmissionProgress::None; }
@@ -1685,6 +1764,7 @@ private:
                 continue;
             }
             auto head_inspection = inspect_admission(head);
+            diagnostic_trace_admission(head, head_inspection.readiness);
             if (head_inspection.readiness == Readiness::PermanentlyInfeasible) {
                 (void)remove_pending_error(
                     head, std::make_exception_ptr(RequestError(
@@ -1759,6 +1839,7 @@ private:
                     continue;
                 }
                 auto candidate_inspection = inspect_admission(candidate);
+                diagnostic_trace_admission(candidate, candidate_inspection.readiness);
                 if (candidate_inspection.readiness == Readiness::PermanentlyInfeasible) {
                     (void)remove_pending_error(
                         candidate, std::make_exception_ptr(RequestError(
@@ -1957,6 +2038,7 @@ private:
                 cancel_active_requests(cancelled_at_boundary, boundary);
                 RoundMembership membership =
                     scheduler_.build_round_membership(slots_, max_concurrency_);
+                diagnostic_trace_membership("boundary", membership);
                 const bool admission_check_pending =
                     admission_check_pending_.load(std::memory_order_acquire);
                 if (scheduler_.should_attempt_admission(
@@ -1965,6 +2047,7 @@ private:
                     consume_admission_check()) {
                     (void)try_admit_one();
                     membership = scheduler_.build_round_membership(slots_, max_concurrency_);
+                    diagnostic_trace_membership("after-admission", membership);
                 }
 
                 // Cancellation is sampled once for the execution unit. A request arriving while
@@ -1982,6 +2065,7 @@ private:
                     continue;
                 }
                 membership = scheduler_.build_round_membership(slots_, max_concurrency_);
+                diagnostic_trace_membership("before-execution", membership);
 
                 bool prefill_runnable = false;
                 if (const auto lane = scheduler_.prefill_lane(); lane) {
@@ -2048,6 +2132,13 @@ private:
     HostWorkClass current_host_work_class_     = HostWorkClass::Control;
     std::array<std::uint32_t, kMaximumConcurrency> current_decode_lanes_{};
     std::size_t current_decode_lane_count_ = 0;
+    std::array<std::uint64_t, kMaximumConcurrency> diagnostic_last_ids_{};
+    std::array<std::uint8_t, kMaximumConcurrency> diagnostic_last_states_{};
+    std::array<bool, kMaximumConcurrency> diagnostic_last_captures_{};
+    std::size_t diagnostic_last_membership_size_ = std::numeric_limits<std::size_t>::max();
+    std::uint64_t diagnostic_last_head_id_         = 0;
+    Readiness diagnostic_last_readiness_           = Readiness::Ready;
+    std::uint32_t diagnostic_last_active_count_    = std::numeric_limits<std::uint32_t>::max();
     RuntimeStats cumulative_stats_;
     RuntimeStats published_stats_;
     bool stopping_ = false;

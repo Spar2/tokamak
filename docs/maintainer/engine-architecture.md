@@ -22,7 +22,7 @@ Generation purpose 的 NInfer Engine 固定运行：
 
 - 一张 GPU；
 - 一个常驻模型实例；
-- 启动时确定的 `max_concurrency=1..8`；
+- 启动时确定的 `max_concurrency=1..9`；
 - 一个有界 FIFO 等待队列；
 - 不抢占已经激活的请求；
 - 每个 decode round 将全部 decode-ready 请求组成一个紧凑批次。

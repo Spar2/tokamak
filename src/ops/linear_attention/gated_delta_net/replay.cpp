@@ -1,5 +1,6 @@
 #include "ninfer/ops/gated_delta_net.h"
 #include "ninfer/ops/gdn_replay.h"
+#include "ninfer/types.h"
 
 #include "ops/linear_attention/gated_delta_net/common.h"
 #include "ops/linear_attention/gated_delta_net/launch.h"
@@ -19,7 +20,7 @@ namespace ninfer::ops {
 namespace {
 
 constexpr std::int32_t kStateDim    = detail::gated_delta_net::kStateDim;
-constexpr std::int32_t kMaximumRows = 8;
+constexpr std::int32_t kMaximumRows = static_cast<std::int32_t>(kMaximumConcurrency);
 
 bool aligned_to(const void* pointer, std::uintptr_t alignment) {
     return pointer != nullptr && (reinterpret_cast<std::uintptr_t>(pointer) & (alignment - 1)) == 0;

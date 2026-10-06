@@ -3,6 +3,7 @@
 #include "core/gdn_replay_records.h"
 #include "core/linear_attention_state.h"
 #include "core/tensor.h"
+#include "ninfer/types.h"
 
 #include <cuda_runtime.h>
 
@@ -19,7 +20,7 @@ struct alignas(16) GdnReplayFoldKernelRow {
 };
 
 struct alignas(16) GdnReplayFoldKernelRows {
-    GdnReplayFoldKernelRow row[8];
+    GdnReplayFoldKernelRow row[kMaximumConcurrency];
 };
 
 void launch_recurrent(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& g,

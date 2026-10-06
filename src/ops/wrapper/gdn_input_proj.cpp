@@ -1,4 +1,5 @@
 #include "ninfer/ops/gdn_input_proj.h"
+#include "ninfer/types.h"
 
 #include "core/layout.h"
 #include "ops/gdn_input_proj/fp8/fp8_gdn_conv_plan.h"
@@ -64,7 +65,7 @@ struct ConvGeometry {
 };
 
 ConvGeometry require_snapshot_input(const Tensor& x, std::int32_t hidden) {
-    constexpr std::int32_t kMaximumBatch = 8;
+    constexpr std::int32_t kMaximumBatch = static_cast<std::int32_t>(kMaximumConcurrency);
     constexpr std::int32_t kMaximumWidth = 16;
     const std::int32_t width             = x.ne[1];
     const std::int32_t batch             = x.ne[2];
@@ -76,7 +77,7 @@ ConvGeometry require_snapshot_input(const Tensor& x, std::int32_t hidden) {
 }
 
 ConvGeometry require_record_input(const Tensor& x, std::int32_t hidden) {
-    constexpr std::int32_t kMaximumBatch = 8;
+    constexpr std::int32_t kMaximumBatch = static_cast<std::int32_t>(kMaximumConcurrency);
     constexpr std::int32_t kMinimumWidth = 2;
     constexpr std::int32_t kMaximumWidth = 16;
     const std::int32_t width             = x.ne[1];
@@ -230,7 +231,7 @@ void require_parent_nonoverlap(const Weight& weight,
 
 void require_snapshot_capacity_domain(std::int32_t batch_size, std::int32_t min_width,
                                       std::int32_t max_width) {
-    constexpr std::int32_t kMaximumBatch = 8;
+    constexpr std::int32_t kMaximumBatch = static_cast<std::int32_t>(kMaximumConcurrency);
     constexpr std::int32_t kMaximumWidth = 16;
     if (batch_size <= 0 || batch_size > kMaximumBatch || min_width <= 0 || max_width < min_width ||
         (batch_size > 1 && max_width > kMaximumWidth)) {
@@ -240,7 +241,7 @@ void require_snapshot_capacity_domain(std::int32_t batch_size, std::int32_t min_
 
 void require_record_capacity_domain(std::int32_t batch_size, std::int32_t min_width,
                                     std::int32_t max_width) {
-    constexpr std::int32_t kMaximumBatch = 8;
+    constexpr std::int32_t kMaximumBatch = static_cast<std::int32_t>(kMaximumConcurrency);
     constexpr std::int32_t kMinimumWidth = 2;
     constexpr std::int32_t kMaximumWidth = 16;
     if (batch_size <= 0 || batch_size > kMaximumBatch || min_width < kMinimumWidth ||
