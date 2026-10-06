@@ -17,7 +17,8 @@ T2Launch select_t2_launch(std::int32_t n, std::int32_t k, std::int32_t t, Linear
     }
     // M5-minimal routing (measured on ffn_gate-class geometry; refine per-shape later):
     // T=1 decode GEMV, 2..32 row-persistent, >32 chunked fallback.
-    if (t == 1) { return launch_t2_gemv; }
+    // T1-A (widened unpack, bit-identical FP order) serves T=1.
+    if (t == 1) { return launch_t2_gemv_t1a; }
     if (t <= 32) { return launch_t2_row_persistent; }
     return launch_t2_chunked;
 }
