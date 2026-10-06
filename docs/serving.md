@@ -761,7 +761,7 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--model-id ID` | override the public OpenAI model alias | artifact `identity.model_id` |
 | `--max-context N` | logical context ceiling of each sequence | `8192` |
 | `--kv-capacity N\|auto` | explicit shared Main Text KV capacity, or maximize it from remaining GPU memory; omitted means `--max-context` | `8192` |
-| `--max-concurrency N` | maximum admitted requests; valid range `1..8` | `1` |
+| `--max-concurrency N` | maximum admitted requests; valid range `1..9` | `1` |
 | `--max-pending-requests N` | additional requests allowed to wait for admission | `16` |
 | `--pending-timeout-ms N` | maximum preparation-plus-admission wait | `30000` |
 | `--prefill-chunk N` | text-prefill chunk | `1024` |
@@ -937,7 +937,7 @@ raw counters and seconds over rounded stderr rates.
 
 ## Execution behavior
 
-The server owns one resident Engine with a startup-fixed capacity of `1..8` active generation
+The server owns one resident Engine with a startup-fixed capacity of `1..9` active generation
 requests. At each decode boundary, every decode-ready request is compacted into one batch and
 processed by one model traversal and, when graphs are enabled, one exact-batch CUDA Graph replay. A
 request joins that batch only after its single-request prefill finishes; when it completes or is

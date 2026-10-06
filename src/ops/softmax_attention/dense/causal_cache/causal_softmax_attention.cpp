@@ -1,5 +1,6 @@
 // ninfer::ops - causal cached Softmax Attention validation and finite route dispatch.
 #include "ninfer/ops/softmax_attention.h"
+#include "ninfer/types.h"
 
 #include "core/layout.h"
 #include "core/paged_kv_storage.h"
@@ -18,7 +19,7 @@ namespace {
 constexpr std::int32_t kHeadDim                      = 256;
 constexpr float kExpectedScale                       = 0.0625f;
 constexpr std::int32_t kMaximumVerifyTokens          = 16;
-constexpr std::int32_t kMaximumBatchSize             = 8;
+constexpr std::int32_t kMaximumBatchSize = static_cast<std::int32_t>(kMaximumConcurrency);
 constexpr std::uint32_t kTwoChunkPromptVisibleKeys   = 512;
 constexpr std::uint32_t kThreeChunkPromptVisibleKeys = 1024;
 

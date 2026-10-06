@@ -112,7 +112,7 @@ void packed_softmax_attention(const Tensor& q, const Tensor& k, const Tensor& v,
  * [B], and the cache is BF16, INT8-G64, row-scaled FP8-E4M3FN, NVFP4-G16, or K8V4. valid_columns is
  * either contiguous device I32 [B] or an empty Tensor meaning every row has W live columns. This
  * dense/masked topology is chosen by the caller and never inferred by copying device metadata to
- * the host. B=1 accepts every positive W in the current prompt/decode domain; B=2..8 accepts
+ * the host. B=1 accepts every positive W in the current prompt/decode domain; B=2..9 accepts
  * W=1..16.
  *
  * Let Vb be W for dense input or valid_columns[b] otherwise. For live column j<Vb with absolute
@@ -168,7 +168,7 @@ void causal_softmax_attention_cached(const Tensor& q, const Tensor& positions,
  * Non-causal grouped-query attention over persistent context plus one live query block.
  *
  * The registered profile is D=128, Hq=32, Hkv=8 (group 4), scale=1/sqrt(128), T=1..16, and
- * B=1..8. q/out are contiguous BF16 [128,32,T,B], query_k/query_v are contiguous BF16
+ * B=1..9. q/out are contiguous BF16 [128,32,T,B], query_k/query_v are contiguous BF16
  * [128,8,T,B], and context_lengths, valid_columns, and table_rows are contiguous device I32 [B].
  * The read-only paged BFloat16 context uses head-major BF16 K and FP16 V planes
  * [128,64,Nphysical,8].

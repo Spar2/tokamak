@@ -1,6 +1,7 @@
 #include "ops/gdn_input_proj/w8/w8_gdn_input_plan.h"
 
 #include "ops/gdn_input_proj/w8/w8_gdn_input_kernels.h"
+#include "ninfer/types.h"
 
 #include <array>
 #include <limits>
@@ -81,7 +82,8 @@ W8GdnInputPlan w8_gdn_input_resolve_plan(const W8GdnInputProblem& problem) {
 
 W8GdnInputConvPlan w8_gdn_input_conv_resolve_plan(const W8GdnInputProblem& problem,
                                                   std::int32_t batch_size) {
-    if (!w8_gdn_input_admits(problem) || batch_size <= 0 || batch_size > 8) {
+    if (!w8_gdn_input_admits(problem) || batch_size <= 0 ||
+        batch_size > static_cast<std::int32_t>(kMaximumConcurrency)) {
         throw std::invalid_argument(
             "W8 GDN input conv: exact problem or column count is not admitted");
     }
