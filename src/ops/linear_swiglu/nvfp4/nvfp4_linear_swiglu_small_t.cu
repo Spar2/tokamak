@@ -10,15 +10,13 @@
 
 #include <array>
 #include <cstddef>
+#include <stdexcept>
 #include <utility>
 
 namespace ninfer::ops::detail {
 namespace {
 
-using Geometry              = Nvfp4MlpGateUpGeometry;
-constexpr int kIntermediate = Geometry::kOutputRows / 2;
-
-template <int ActiveTokens, class Schedule>
+template <class Geometry, int ActiveTokens, class Schedule>
 __global__ __launch_bounds__(
     Schedule::kThreads,
     Schedule::
@@ -29,11 +27,13 @@ __global__ __launch_bounds__(
                                                                      uint8_t* __restrict__ scales,
                                                                  float inverse_weight_divisor,
                                                                  __nv_bfloat16* __restrict__ out) {
+    constexpr int kIntermediate = Geometry::kOutputRows / 2;
     static_assert(Schedule::kWarpsPerRow == 1);
     static_assert(Schedule::kRowsPerWarp == 2);
     static_assert(Schedule::kTokenTile == ActiveTokens);
     static_assert((Schedule::kWarpsPerCta % 4) == 0);
     static_assert((128 % Schedule::kWarpsPerCta) == 0);
+    static_assert((kIntermediate % Schedule::kWarpsPerCta) == 0);
 
     __shared__ Nvfp4SmallTSharedStorage<Geometry, ActiveTokens, Schedule> shared;
     constexpr int kCtasPerM128                    = 128 / Schedule::kWarpsPerCta;
@@ -74,8 +74,9 @@ __global__ __launch_bounds__(
 
 using Launch = void (*)(const Tensor&, const Weight&, Tensor&, cudaStream_t);
 
-template <int ActiveTokens>
+template <class Geometry, int ActiveTokens>
 void launch_exact(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+    constexpr int kIntermediate = Geometry::kOutputRows / 2;
     static constexpr auto kActivationAccess = ActiveTokens <= 4
                                                   ? Nvfp4SmallTActivationAccess::SharedPhase
                                                   : Nvfp4SmallTActivationAccess::TokenPacked;
@@ -86,7 +87,7 @@ void launch_exact(const Tensor& x, const Weight& weight, Tensor& out, cudaStream
     static_assert((kIntermediate % Schedule::kWarpsPerCta) == 0);
     constexpr int kBlocks = kIntermediate / Schedule::kWarpsPerCta;
     const float inverse   = 1.0F / weight.weight_scale_divisor;
-    nvfp4_linear_swiglu_small_t_kernel<ActiveTokens, Schedule>
+    nvfp4_linear_swiglu_small_t_kernel<Geometry, ActiveTokens, Schedule>
         <<<kBlocks, Schedule::kThreads, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data),
             static_cast<const std::uint8_t*>(weight.qdata),
@@ -95,20 +96,39 @@ void launch_exact(const Tensor& x, const Weight& weight, Tensor& out, cudaStream
     CUDA_CHECK(cudaGetLastError());
 }
 
-template <std::size_t... Offsets>
+template <class Geometry, std::size_t... Offsets>
 constexpr auto make_launchers(std::index_sequence<Offsets...>) {
     return std::array<Launch, sizeof...(Offsets)>{
-        &launch_exact<kNvfp4FirstSmallT + static_cast<int>(Offsets)>...};
+        &launch_exact<Geometry, kNvfp4FirstSmallT + static_cast<int>(Offsets)>...};
 }
 
-constexpr auto kLaunchers = make_launchers(std::make_index_sequence<16 - kNvfp4FirstSmallT + 1>{});
+template <class Geometry>
+const auto& launchers() {
+    static constexpr auto kLaunchers = make_launchers<Geometry>(
+        std::make_index_sequence<kNvfp4OrnithLastSmallT - kNvfp4FirstSmallT + 1>{});
+    return kLaunchers;
+}
 
 } // namespace
 
 void nvfp4_linear_swiglu_small_t_launch(const Tensor& x, const Weight& weight, Tensor& out,
                                         cudaStream_t stream) {
     const std::size_t index = static_cast<std::size_t>(x.ne[1] - kNvfp4FirstSmallT);
-    kLaunchers[index](x, weight, out, stream);
+    switch (resolve_nvfp4_problem(weight.n, weight.k)) {
+    case Nvfp4Problem::MlpGateUp:
+        launchers<Nvfp4MlpGateUpGeometry>()[index](x, weight, out, stream);
+        return;
+    case Nvfp4Problem::MlpGateUp4096:
+        launchers<Nvfp4MlpGateUp4096Geometry>()[index](x, weight, out, stream);
+        return;
+    case Nvfp4Problem::AttnInput:
+    case Nvfp4Problem::GdnInput:
+    case Nvfp4Problem::MlpDown12288:
+    case Nvfp4Problem::Residual6144:
+    case Nvfp4Problem::Residual17408:
+        break;
+    }
+    throw std::invalid_argument("nvfp4 linear_swiglu small-t: unsupported problem");
 }
 
 } // namespace ninfer::ops::detail

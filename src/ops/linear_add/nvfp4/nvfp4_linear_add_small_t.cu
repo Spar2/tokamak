@@ -46,6 +46,7 @@ constexpr auto make_launchers() {
 
 constexpr auto kResidual6144Launchers  = make_launchers<Nvfp4Residual6144Geometry>();
 constexpr auto kResidual17408Launchers = make_launchers<Nvfp4Residual17408Geometry>();
+constexpr auto kMlpDown12288Launchers  = make_launchers<Nvfp4MlpDown12288Geometry>();
 
 } // namespace
 
@@ -59,9 +60,13 @@ void nvfp4_linear_add_small_t_launch(const Tensor& x, const Weight& weight, Tens
     case Nvfp4Problem::Residual17408:
         kResidual17408Launchers[index](x, weight, residual, stream);
         return;
+    case Nvfp4Problem::MlpDown12288:
+        kMlpDown12288Launchers[index](x, weight, residual, stream);
+        return;
     case Nvfp4Problem::AttnInput:
     case Nvfp4Problem::GdnInput:
     case Nvfp4Problem::MlpGateUp:
+    case Nvfp4Problem::MlpGateUp4096:
         break;
     }
     throw std::invalid_argument("nvfp4 linear_add: unsupported problem");

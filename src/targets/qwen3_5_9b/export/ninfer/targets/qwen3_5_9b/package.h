@@ -30,6 +30,7 @@ struct Variant;
 
 enum class WeightsProfile : std::uint8_t {
     GroupwiseInt,
+    Nvfp4Mlp,
 };
 
 using Frontend       = qwen3_6::Frontend;

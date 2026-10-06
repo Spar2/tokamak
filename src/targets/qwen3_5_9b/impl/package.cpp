@@ -69,6 +69,9 @@ Package::WeightsProfile Package::resolve_weights(const artifact::ArtifactIdentit
         identity.weights_id == "groupwise-int") {
         return WeightsProfile::GroupwiseInt;
     }
+    if (identity.model_id == ornith_model_id && identity.weights_id == "nvfp4") {
+        return WeightsProfile::Nvfp4Mlp;
+    }
     throw std::runtime_error("artifact identity '" + identity.model_id + "/" + identity.weights_id +
                              "' is not supported by target '" + std::string(target_key) + "'");
 }

@@ -109,11 +109,19 @@ std::size_t linear_add_workspace_capacity_bytes(QType qtype, std::int32_t output
                                                               min_tokens, max_tokens);
     }
     if (qtype == QType::NVFP4) {
-        const bool supported = (output_rows == detail::Nvfp4Residual6144Geometry::kOutputRows &&
-                                input_rows == detail::Nvfp4Residual6144Geometry::kInputRows) ||
-                               (output_rows == detail::Nvfp4Residual17408Geometry::kOutputRows &&
-                                input_rows == detail::Nvfp4Residual17408Geometry::kInputRows);
-        if (!supported || (policy != LinearPolicy::A16Only && policy != LinearPolicy::AllowA4)) {
+        const bool residual_27b =
+            (output_rows == detail::Nvfp4Residual6144Geometry::kOutputRows &&
+             input_rows == detail::Nvfp4Residual6144Geometry::kInputRows) ||
+            (output_rows == detail::Nvfp4Residual17408Geometry::kOutputRows &&
+             input_rows == detail::Nvfp4Residual17408Geometry::kInputRows);
+        const bool ornith_down = output_rows == detail::Nvfp4MlpDown12288Geometry::kOutputRows &&
+                                 input_rows == detail::Nvfp4MlpDown12288Geometry::kInputRows;
+        if (ornith_down) {
+            if (policy != LinearPolicy::A16Only) {
+                throw std::invalid_argument("linear_add workspace: Ornith NVFP4 down admits only A16");
+            }
+        } else if (!residual_27b ||
+                   (policy != LinearPolicy::A16Only && policy != LinearPolicy::AllowA4)) {
             throw std::invalid_argument("linear_add workspace: unsupported NVFP4 profile");
         }
         return detail::nvfp4_linear_add_workspace_capacity_bytes(output_rows, input_rows, policy,
@@ -210,9 +218,15 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, LinearPo
         const bool supported_shape = (w.n == detail::Nvfp4Residual6144Geometry::kOutputRows &&
                                       w.k == detail::Nvfp4Residual6144Geometry::kInputRows) ||
                                      (w.n == detail::Nvfp4Residual17408Geometry::kOutputRows &&
-                                      w.k == detail::Nvfp4Residual17408Geometry::kInputRows);
+                                      w.k == detail::Nvfp4Residual17408Geometry::kInputRows) ||
+                                     (w.n == detail::Nvfp4MlpDown12288Geometry::kOutputRows &&
+                                      w.k == detail::Nvfp4MlpDown12288Geometry::kInputRows);
         if (!supported_shape) {
             throw std::invalid_argument("nvfp4 linear_add: unsupported weight shape");
+        }
+        if (w.n == detail::Nvfp4MlpDown12288Geometry::kOutputRows &&
+            policy != LinearPolicy::A16Only) {
+            throw std::invalid_argument("nvfp4 linear_add: Ornith down admits only A16");
         }
         if (!aligned_to(x.data, 16) || !aligned_to(residual_out.data, 16)) {
             throw std::invalid_argument("linear_add: NVFP4 requires 16-byte x/residual alignment");
