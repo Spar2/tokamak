@@ -44,6 +44,10 @@ Nvfp4LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+    if (is_ornith_nvfp4_mlp(weight.n, weight.k) && x.ne[1] >= kNvfp4OrnithMmaMinT) {
+        launch_nvfp4_w4a16_mma(x, weight, out, stream);
+        return;
+    }
     const std::int32_t kChunk = is_ornith_nvfp4_mlp(weight.n, weight.k) ? kNvfp4OrnithLastSmallT
                                                                        : kNvfp4LastSmallT;
     for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += kChunk) {
@@ -71,6 +75,10 @@ std::size_t nvfp4_linear_workspace_capacity_bytes(std::int32_t output_rows, std:
         throw std::invalid_argument("nvfp4 linear workspace: invalid token interval");
     }
     (void)resolve_route(output_rows, input_rows, policy, min_tokens);
+    if (policy == LinearPolicy::A16Only && is_ornith_nvfp4_mlp(output_rows, input_rows) &&
+        ornith_dynamic_w4a4_requested() && max_tokens >= kNvfp4OrnithDynamicW4a4MinT) {
+        return nvfp4_w4a4_workspace_capacity_bytes(max_tokens, input_rows);
+    }
     return resolve_route(output_rows, input_rows, policy, max_tokens) == Nvfp4LinearRoute::W4A4
                ? nvfp4_w4a4_workspace_capacity_bytes(max_tokens, input_rows)
                : 0;
@@ -83,6 +91,17 @@ void nvfp4_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPo
         throw std::invalid_argument("nvfp4 linear: unsupported shape");
     }
 
+    if (policy == LinearPolicy::A16Only && is_ornith_nvfp4_mlp(weight.n, weight.k) &&
+        use_ornith_dynamic_w4a4(x.ne[1])) {
+        if (workspace == nullptr) {
+            throw std::invalid_argument("nvfp4 dynamic W4A4 linear requires caller workspace");
+        }
+        auto scope                       = workspace->scope();
+        const Nvfp4W4a4Workspace scratch = allocate_nvfp4_w4a4_workspace(*workspace, x.ne[1],
+                                                                         weight.k);
+        launch_nvfp4_dynamic_w4a4(x, weight, out, scratch, stream);
+        return;
+    }
     if (resolve_route(weight.n, weight.k, policy, x.ne[1]) == Nvfp4LinearRoute::A16) {
         launch_a16(x, weight, out, stream);
         return;

@@ -47,6 +47,11 @@ const auto& launchers() {
 } // namespace
 
 void launch_nvfp4_small_t(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+    // Launcher tables cover T in [kNvfp4FirstSmallT, kNvfp4LastSmallT]; T=1
+    // must use the decode path. Fail loudly instead of indexing out of bounds.
+    if (x.ne[1] < kNvfp4FirstSmallT || x.ne[1] > kNvfp4LastSmallT) {
+        throw std::invalid_argument("nvfp4 linear small-t: unsupported token count");
+    }
     const std::size_t index = static_cast<std::size_t>(x.ne[1] - kNvfp4FirstSmallT);
     switch (resolve_nvfp4_problem(weight.n, weight.k)) {
     case Nvfp4Problem::AttnInput:

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 
 namespace ninfer::ops::detail {
@@ -118,6 +120,7 @@ using Nvfp4Residual17408Geometry = Nvfp4GemvGeometry<5120, 17408>;
 using Nvfp4Activation5120Geometry  = Nvfp4ActivationGeometry<5120>;
 using Nvfp4Activation4096Geometry  = Nvfp4ActivationGeometry<4096>;
 using Nvfp4Activation6144Geometry  = Nvfp4ActivationGeometry<6144>;
+using Nvfp4Activation12288Geometry = Nvfp4ActivationGeometry<12288>;
 using Nvfp4Activation17408Geometry = Nvfp4ActivationGeometry<17408>;
 
 enum class Nvfp4Problem : std::uint8_t {
@@ -190,6 +193,55 @@ inline constexpr std::int32_t kNvfp4FirstSmallT = 2;
 inline constexpr std::int32_t kNvfp4LastSmallT  = 32;
 // Ornith MLP A16 is validated through T=16. T=32 on 24576x4096 failed numeric checks.
 inline constexpr std::int32_t kNvfp4OrnithLastSmallT = 16;
+// First T where W4A16 BF16-MMA is used for Ornith MLP. Measured crossover vs tiled
+// small-T A16 is between 16 and 32 on RTX 5060 Ti.
+inline constexpr std::int32_t kNvfp4OrnithMmaMinT = 32;
+inline constexpr std::int32_t kNvfp4OrnithSwigluMmaTile = 128;
+
+// Dynamic W4A4 activation contract (Ornith experiment, independent of the artifact):
+// each token-column is quantized in K16 groups. scale_e4m3 = sat(max_abs(K16)/6),
+// codes = e2m1(x / decode(scale)). Runtime d_x is identically 1 (no extra global
+// scale). Artifact input_scale_divisor is never read. GEMM alpha = 1/d_w.
+inline constexpr float kNvfp4DynamicPerK16Dx = 1.0F;
+inline constexpr std::int32_t kNvfp4OrnithDynamicW4a4MinT = 128;
+
+// Production policy (graduated): dynamic W4A4 is ON by default for Ornith MLP
+// at T >= kNvfp4OrnithDynamicW4a4MinT. NINFER_ORNITH_DYNAMIC_W4A4 overrides:
+// unset (or "1"/"full") -> full dynamic; "gate_only" -> dynamic gate_up only,
+// down stays W4A16 BF16-MMA; "0"/"off"/"no" -> pure W4A16 fallback. The W4A16
+// small-T (T<=16) and BF16-MMA (32<=T<128) paths are always intact regardless
+// of this setting. Scope is Ornith MLP only; 27B routes never consult this.
+inline int ornith_dynamic_w4a4_mode() {
+#if defined(__CUDA_ARCH__)
+    // Never consulted on device (getenv is host-only); conservative fallback.
+    return 0;
+#else
+    static const int mode = [] {
+        const char* value = std::getenv("NINFER_ORNITH_DYNAMIC_W4A4");
+        if (value == nullptr) { return 2; }
+        if (std::strcmp(value, "1") == 0 || std::strcmp(value, "full") == 0) { return 2; }
+        if (std::strcmp(value, "gate_only") == 0) { return 1; }
+        if (std::strcmp(value, "0") == 0 || std::strcmp(value, "off") == 0 ||
+            std::strcmp(value, "no") == 0) {
+            return 0;
+        }
+        return 2;
+    }();
+    return mode;
+#endif
+}
+
+inline bool ornith_dynamic_w4a4_requested() { return ornith_dynamic_w4a4_mode() != 0; }
+
+inline bool use_ornith_dynamic_w4a4(std::int32_t tokens) {
+    return ornith_dynamic_w4a4_requested() && tokens >= kNvfp4OrnithDynamicW4a4MinT;
+}
+
+// Down projection follows the dynamic route only in full mode; gate_only
+// keeps it on W4A16 BF16-MMA.
+inline bool use_ornith_dynamic_w4a4_for_down(std::int32_t tokens) {
+    return ornith_dynamic_w4a4_mode() == 2 && tokens >= kNvfp4OrnithDynamicW4a4MinT;
+}
 
 inline constexpr bool is_ornith_nvfp4_mlp(std::int32_t output_rows, std::int32_t input_rows) {
     return (output_rows == Nvfp4MlpGateUp4096Geometry::kOutputRows &&

@@ -1,6 +1,7 @@
 #include "ops/linear/linear_test_common.h"
 
 #include <array>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 
@@ -25,6 +26,18 @@ int run_nvfp4_a16() {
         Invocation{4, CallForm::Policy, ops::LinearPolicy::A16Only},
         Invocation{16, CallForm::Policy, ops::LinearPolicy::A16Only},
     };
+    constexpr std::array ornith_invocations{
+        Invocation{1, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{4, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{16, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{17, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{18, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{31, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{32, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{64, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{128, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{129, CallForm::Policy, ops::LinearPolicy::A16Only},
+    };
     int failures = 0;
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
                           {14336, 5120, 701U, Comparison::Sampled, true, attn_invocations});
@@ -37,15 +50,20 @@ int run_nvfp4_a16() {
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
                           {5120, 17408, 707U, Comparison::Sampled, true, new_problem_invocations});
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
-                          {24576, 4096, 709U, Comparison::Sampled, true, new_problem_invocations});
+                          {24576, 4096, 709U, Comparison::Sampled, true, ornith_invocations});
     failures += run_shape("NVFP4_A16", ActivationCompute::A16, make_nvfp4_weight,
-                          {4096, 12288, 711U, Comparison::Sampled, true, new_problem_invocations});
+                          {4096, 12288, 711U, Comparison::Sampled, true, ornith_invocations});
     return failures;
 }
 
 } // namespace
 
 int main() {
+    // Hermetic A16-oracle validation: the graduated default routes Ornith MLP
+    // A16Only at T>=128 to dynamic W4A4, which is approximate and must fail a
+    // tight exact-dequant oracle. Pin the W4A16 fallback so this suite tests
+    // what its name claims regardless of ambient environment.
+    ::setenv("NINFER_ORNITH_DYNAMIC_W4A4", "0", 1);
     if (!ninfer::test::linear::cuda_available()) {
         std::cout << "SKIP: no usable CUDA device\n";
         return 77;

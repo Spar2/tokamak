@@ -12,7 +12,16 @@
 #include "ninfer/ops/silu_mul.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
 #include <stdexcept>
+#include <string>
+#include <vector>
+
+#include <cuda_runtime.h>
 
 #define NINFER_QWEN36_VARIANT    ::ninfer::targets::qwen3_5_9b::detail::Variant
 #define NINFER_QWEN36_RUNTIME_NS qwen3_5_9b_runtime
@@ -260,6 +269,10 @@ void Variant::gdn_norm_control_projection(const Tensor& residual, const Tensor& 
                               workspace, hidden, g, beta, execution);
 }
 
+// Experimental Phase-2 capture hook (defined at end of file). No-op unless
+// NINFER_DUMP_MLP_DIR is set; see the contract comment at the definition.
+void debug_mlp_dump(const Tensor& hidden, const Tensor& activation, cudaStream_t stream);
+
 void Variant::post_mixer(const Tensor& hidden, const PostMixerWeights& weights, Tensor& residual,
                          qwen3_6::TextPhase, const ::ninfer::ops::SparseMoeHints&,
                          WorkspaceArena& workspace, cudaStream_t stream) {
@@ -269,6 +282,7 @@ void Variant::post_mixer(const Tensor& hidden, const PostMixerWeights& weights, 
                        workspace, stream);
     ops::linear_add(activation, weights.down, residual, text_policy(weights.down), workspace,
                     stream);
+    debug_mlp_dump(hidden, activation, stream);
 }
 
 void Variant::mtp_post_mixer(const Tensor& hidden, const MtpPostMixerWeights& weights,
@@ -436,6 +450,122 @@ std::size_t Variant::mtp_post_mixer_workspace_capacity_bytes(std::int32_t first,
     (void)layout.alloc(DType::BF16, {TextConfig::intermediate, last});
     (void)layout.alloc(DType::BF16, {TextConfig::hidden, last});
     return layout.peak_bytes(1);
+}
+
+// ---------------------------------------------------------------------------
+// Experimental MLP activation capture (Phase-2 quality tooling, w4a4 branch).
+//
+// Env contract (all optional; unset NINFER_DUMP_MLP_DIR = fully off):
+//   NINFER_DUMP_MLP_DIR     destination directory (must exist; dumps stay local)
+//   NINFER_DUMP_MLP_LAYERS  csv layer list, default "0,15,30"
+//   NINFER_DUMP_MLP_TOKENS  first-N tokens per tensor, default 512
+//   NINFER_DUMP_MLP_MIN_T   ignore invocations with T below this, default 64
+//                           (startup warmup passes must not latch the dump)
+//
+// Layer identity comes from an invocation counter mod 32, which is valid only
+// for single-stream ordered passes (MTP OFF, max-concurrency 1) WITHOUT CUDA
+// graphs: graph replay does not re-execute host code, so captured graphs would
+// dump capture-time data. Serve with --no-cuda-graph for capture runs.
+// Dumps the first invocation per selected layer (gate_up input = post-norm
+// hidden state [4096,T]; down input = SwiGLU output [12288,T]) as raw LE BF16
+// plus a meta.json manifest. Never enabled in production.
+// ---------------------------------------------------------------------------
+namespace debug_mlp_dump_detail {
+std::atomic<std::uint64_t> g_calls{0};
+bool g_dumped[32] = {};
+
+struct DumpConfig {
+    bool enabled = false;
+    std::string dir;
+    bool layers[32] = {};
+    int tokens      = 512;
+    int min_t       = 64;
+};
+
+const DumpConfig& config() {
+    static const DumpConfig cfg = [] {
+        DumpConfig c;
+        const char* dir = std::getenv("NINFER_DUMP_MLP_DIR");
+        if (dir == nullptr || dir[0] == '\0') { return c; }
+        c.dir     = dir;
+        c.enabled = true;
+        const char* layers = std::getenv("NINFER_DUMP_MLP_LAYERS");
+        const std::string list = (layers != nullptr && layers[0] != '\0') ? layers : "0,15,30";
+        std::size_t begin      = 0;
+        while (begin <= list.size()) {
+            const std::size_t end = list.find(',', begin);
+            const std::string tok =
+                (end == std::string::npos) ? list.substr(begin) : list.substr(begin, end - begin);
+            try {
+                const int layer = std::stoi(tok);
+                if (layer >= 0 && layer < 32) { c.layers[layer] = true; }
+            } catch (...) {}
+            if (end == std::string::npos) { break; }
+            begin = end + 1;
+        }
+        const char* tok = std::getenv("NINFER_DUMP_MLP_TOKENS");
+        if (tok != nullptr && tok[0] != '\0') {
+            try {
+                c.tokens = std::max(1, std::stoi(tok));
+            } catch (...) {}
+        }
+        const char* mint = std::getenv("NINFER_DUMP_MLP_MIN_T");
+        if (mint != nullptr && mint[0] != '\0') {
+            try {
+                c.min_t = std::max(1, std::stoi(mint));
+            } catch (...) {}
+        }
+        return c;
+    }();
+    return cfg;
+}
+
+void write_raw(const std::string& path, const void* data, std::size_t bytes) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) { return; }
+    out.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+}
+} // namespace debug_mlp_dump_detail
+
+void debug_mlp_dump(const Tensor& hidden, const Tensor& activation, cudaStream_t stream) {
+    using namespace debug_mlp_dump_detail;
+    const DumpConfig& cfg = config();
+    if (!cfg.enabled) { return; }
+    const int layer = static_cast<int>(g_calls.fetch_add(1) % 32);
+    if (!cfg.layers[layer] || g_dumped[layer]) { return; }
+    // Skip warmup/decode trickles: first invocation per layer with T >= min_t.
+    // Startup warmup passes (small synthetic T) must not latch the dump.
+    if (hidden.ne[1] < cfg.min_t) { return; }
+    g_dumped[layer] = true;
+    const int take = std::min(cfg.tokens, hidden.ne[1]);
+    if (take <= 0 || hidden.ne[0] != 4096 || activation.ne[0] != 12288 ||
+        activation.ne[1] != hidden.ne[1]) {
+        return;
+    }
+    if (cudaStreamSynchronize(stream) != cudaSuccess) { return; }
+    char name[256];
+    std::snprintf(name, sizeof(name), "%s/l%02d_gatein_K4096_T%d.bf16le", cfg.dir.c_str(), layer,
+                  take);
+    std::vector<std::uint8_t> host(static_cast<std::size_t>(4096) * take * 2);
+    if (cudaMemcpy(host.data(), hidden.data, host.size(), cudaMemcpyDeviceToHost) != cudaSuccess) {
+        return;
+    }
+    // Column-major [K,T] layout: first `take` columns are a contiguous prefix.
+    write_raw(name, host.data(), host.size());
+    std::snprintf(name, sizeof(name), "%s/l%02d_downin_K12288_T%d.bf16le", cfg.dir.c_str(), layer,
+                  take);
+    host.assign(static_cast<std::size_t>(12288) * take * 2, 0);
+    if (cudaMemcpy(host.data(), activation.data, host.size(), cudaMemcpyDeviceToHost) !=
+        cudaSuccess) {
+        return;
+    }
+    write_raw(name, host.data(), host.size());
+    std::snprintf(name, sizeof(name),
+                  "{\"layer\":%d,\"take\":%d,\"full_t\":%d,\"gatein\":\"l%02d_gatein_K4096_T%d."
+                  "bf16le\",\"downin\":\"l%02d_downin_K12288_T%d.bf16le\"}\n",
+                  layer, take, hidden.ne[1], layer, take, layer, take);
+    std::ofstream meta(cfg.dir + "/meta.json", std::ios::app);
+    if (meta) { meta << name; }
 }
 
 } // namespace ninfer::targets::qwen3_5_9b::detail

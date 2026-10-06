@@ -102,4 +102,75 @@ void nvfp4_linear_swiglu_w4a4_launch(const Tensor& x, const Weight& weight, Tens
     }
 }
 
+namespace {
+
+using OrnithGeometry = Nvfp4MlpGateUp4096Geometry;
+constexpr int kOrnithIntermediate = OrnithGeometry::kOutputRows / 2;
+
+struct OrnithSwiGluRows {
+    static constexpr bool kContiguous   = false;
+    static constexpr int kRowsPerBranch = M64N128::kBlockN / 2;
+
+    __device__ __forceinline__ int weight_row(int row_begin, int local_row) const {
+        return row_begin + (local_row & (kRowsPerBranch - 1)) +
+               (local_row >= kRowsPerBranch ? kOrnithIntermediate : 0);
+    }
+};
+
+struct OrnithSwiGluOutput {
+    __nv_bfloat16* data;
+
+    __device__ __forceinline__ unsigned combine(unsigned gate_bits, unsigned up_bits) const {
+        Nvfp4SwiGluBf16Pair gate{gate_bits};
+        Nvfp4SwiGluBf16Pair up{up_bits};
+        const float2 gate_values = __bfloat1622float2(gate.values);
+        const float2 up_values   = __bfloat1622float2(up.values);
+        Nvfp4SwiGluBf16Pair result;
+        result.values = __floats2bfloat162_rn(silu(gate_values.x) * up_values.x,
+                                              silu(gate_values.y) * up_values.y);
+        return result.bits;
+    }
+
+    __device__ __forceinline__ void store_pair_vector(std::int32_t row, std::int32_t token,
+                                                      uint4 gate, uint4 up) const {
+        const uint4 values = make_uint4(combine(gate.x, up.x), combine(gate.y, up.y),
+                                        combine(gate.z, up.z), combine(gate.w, up.w));
+        store_vec(data + static_cast<std::int64_t>(token) * kOrnithIntermediate + row, values);
+    }
+};
+
+template <class Schedule>
+void launch_ornith_gemm(const Weight& weight, Tensor& out, Nvfp4W4a4Workspace workspace,
+                        std::int32_t tokens, cudaStream_t stream) {
+    constexpr int kPairRows = Schedule::kBlockN / 2;
+    static_assert(kPairRows == OrnithSwiGluRows::kRowsPerBranch);
+    const dim3 grid(kOrnithIntermediate / kPairRows,
+                    (tokens + Schedule::kBlockM - 1) / Schedule::kBlockM);
+    const Nvfp4W4a4MaterializedActivation activation{workspace.codes, workspace.scales};
+    const OrnithSwiGluRows row_policy{};
+    const OrnithSwiGluOutput output{static_cast<__nv_bfloat16*>(out.data)};
+    const float alpha = 1.0F / (kNvfp4DynamicPerK16Dx * weight.weight_scale_divisor);
+    nvfp4_w4a4_mma_kernel<OrnithGeometry, Schedule, Nvfp4IdentityEpilogue, OrnithSwiGluOutput,
+                          OrnithSwiGluRows, true><<<grid, Schedule::kThreads, 0, stream>>>(
+        activation, static_cast<const std::uint8_t*>(weight.qdata),
+        static_cast<const std::uint8_t*>(weight.scales), tokens, alpha, Nvfp4IdentityEpilogue{},
+        output, row_policy);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+} // namespace
+
+void launch_nvfp4_dynamic_w4a4_swiglu(const Tensor& x, const Weight& weight, Tensor& out,
+                                      Nvfp4W4a4Workspace workspace, cudaStream_t stream) {
+    launch_nvfp4_dynamic_w4a4_quantize(x, workspace, stream);
+    const std::int32_t tokens = x.ne[1];
+    if (tokens <= M64N128::kBlockM) {
+        launch_ornith_gemm<M64N128>(weight, out, workspace, tokens, stream);
+    } else if (tokens <= M96N128::kBlockM) {
+        launch_ornith_gemm<M96N128>(weight, out, workspace, tokens, stream);
+    } else {
+        launch_ornith_gemm<M128N128>(weight, out, workspace, tokens, stream);
+    }
+}
+
 } // namespace ninfer::ops::detail
