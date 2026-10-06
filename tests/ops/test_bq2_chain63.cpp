@@ -68,10 +68,35 @@ int main() {
         // chain at layer N from the reference l_out-(N-1). Per-layer GDN
         // conv/ssm states and full-layer KV start zeroed, exactly as in a
         // fresh prefill (states are per-layer, built within the call).
+        // Cold-first-output support: NINFER_BQ2_ONLY_T=K runs only the T=K
+        // case (fresh process => this is the FIRST trusted prefill).
         int il0 = 0;
         if (const char* s = std::getenv("NINFER_BQ2_START_LAYER")) { il0 = std::atoi(s); }
+        int only_t = 0;
+        if (const char* s = std::getenv("NINFER_BQ2_ONLY_T")) { only_t = std::atoi(s); }
+        bool warmed = false;
         for (const auto& c : cases) {
             const int T = static_cast<int>(c.ids.size());
+            if (only_t != 0 && T != only_t) { continue; }
+            if (only_t != 0 && !warmed) {
+                // Mode-E init contract, recorded: synchronize, run one
+                // sacrificial stateless T2 sync launch on dedicated scratch
+                // (fg weight, synthetic input; result discarded, touches no
+                // model state), synchronize. The trusted prefill below is
+                // the first output compared against Prism.
+                warmed = true;
+                device.synchronize();
+                {
+                    DeviceBuffer wdx(5120 * 32 * 2), wdy(17408 * 32 * 2);
+                    wdx.fill(0);
+                    device.synchronize();
+                    const Tensor wx(wdx.p, DType::BF16, {5120, 32});
+                    Tensor wy(wdy.p, DType::BF16, {17408, 32});
+                    ops::linear(wx, model.gdn[8].fg, wy, stream);
+                    device.synchronize();
+                }
+                std::printf("t2-warmup: sacrificial stateless P1 launch discarded\n");
+            }
             std::printf("== T=%d from L%d ==\n", T, il0);
             state.reset();
             DeviceBuffer d_x(5120 * T * 2);
