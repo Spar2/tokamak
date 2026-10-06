@@ -18,10 +18,12 @@ Q5 = base.Q5
 Q6 = base.Q6
 W8 = base.W8
 NVFP4 = "NVFP4"
+FP8 = "FP8_E4M3FN_ROW_BF16S"
 
 CONTIGUOUS_LAYOUT = base.CONTIGUOUS_LAYOUT
 ROW_SPLIT_LAYOUT = base.ROW_SPLIT_LAYOUT
 BLOCK_SCALE_LAYOUT = "blockscale-k16-m128x4-v1"
+ROW_SCALE_LAYOUT = "row-scale-v1"
 
 RESOURCE_SPECS = base.RESOURCE_SPECS
 ResourceSpec = base.ResourceSpec
@@ -36,6 +38,8 @@ def _tensor(name: str, shape: tuple[int, ...], numeric_format: str) -> TensorSpe
         layout = CONTIGUOUS_LAYOUT
     elif numeric_format == NVFP4:
         layout = BLOCK_SCALE_LAYOUT
+    elif numeric_format == FP8:
+        layout = ROW_SCALE_LAYOUT
     else:
         layout = ROW_SPLIT_LAYOUT
     return TensorSpec(name, shape, numeric_format, layout)
@@ -66,6 +70,12 @@ def _build_text_core_specs() -> tuple[TensorSpec, ...]:
             specs.append(_tensor(_input_scale_after(spec), (), FP32))
             continue
         specs.append(original)
+        # Native FP8 large-T parent alongside the groupwise small-T parents.
+        # Unlike the 27B NVFP4 contract (which replaces the split parents),
+        # the hybrid T-policy needs both representations resident.
+        if original.name.endswith("/gdn/value_z"):
+            prefix = original.name.removesuffix("/value_z")
+            specs.append(_tensor(prefix + "/query_key_value_z", (12288, 4096), FP8))
     return tuple(specs)
 
 
@@ -82,8 +92,8 @@ TENSOR_SPECS = (
 )
 OBJECT_SPECS: tuple[StoredObjectSpec, ...] = RESOURCE_SPECS + TENSOR_SPECS
 
-FORMAT_NAMES = (BF16, FP32, I32, Q4, Q5, Q6, W8, NVFP4)
-LAYOUT_NAMES = (CONTIGUOUS_LAYOUT, ROW_SPLIT_LAYOUT, BLOCK_SCALE_LAYOUT)
+FORMAT_NAMES = (BF16, FP32, I32, Q4, Q5, Q6, W8, NVFP4, FP8)
+LAYOUT_NAMES = (CONTIGUOUS_LAYOUT, ROW_SPLIT_LAYOUT, BLOCK_SCALE_LAYOUT, ROW_SCALE_LAYOUT)
 FORMAT_COUNTS = {
     numeric_format: sum(spec.format == numeric_format for spec in TENSOR_SPECS)
     for numeric_format in FORMAT_NAMES
@@ -97,11 +107,16 @@ LOGICAL_ROW_VIEW_SPECS = base.LOGICAL_ROW_VIEW_SPECS
 ALIAS_SPECS = base.ALIAS_SPECS
 
 NVFP4_TENSOR_SPECS = tuple(spec for spec in TENSOR_SPECS if spec.format == NVFP4)
+FP8_GDN_TENSOR_SPECS = tuple(spec for spec in TENSOR_SPECS if spec.format == FP8)
 INPUT_SCALE_DIVISOR_SPECS = tuple(
     spec
     for spec in TENSOR_SPECS
     if spec.format == FP32 and spec.name.endswith("/input_scale_divisor")
 )
+
+# Native FP8 GDN parent count. Kept symbolic so the head-branch delta (+1
+# NVFP4 object) cherry-picks against these lines with a mechanical offset.
+N_FP8_GDN_PARENTS = 24
 
 
 def validate_inventory() -> None:
@@ -116,15 +131,17 @@ def validate_inventory() -> None:
         len(TENSOR_SPECS),
         len(OBJECT_SPECS),
         len(NVFP4_TENSOR_SPECS),
+        len(FP8_GDN_TENSOR_SPECS),
         len(INPUT_SCALE_DIVISOR_SPECS),
     ) != (
-        len(base.TEXT_CORE_TENSOR_SPECS) + 64,
+        len(base.TEXT_CORE_TENSOR_SPECS) + 64 + N_FP8_GDN_PARENTS,
         2,
         12,
         333,
-        len(base.TENSOR_SPECS) + 64,
-        len(base.OBJECT_SPECS) + 64,
+        len(base.TENSOR_SPECS) + 64 + N_FP8_GDN_PARENTS,
+        len(base.OBJECT_SPECS) + 64 + N_FP8_GDN_PARENTS,
         64,
+        N_FP8_GDN_PARENTS,
         64,
     ):
         raise ValueError("registered Ornith NVFP4 inventory is incomplete")
@@ -133,18 +150,28 @@ def validate_inventory() -> None:
     expected_formats[Q5] = expected_formats[Q5] - 32
     expected_formats[FP32] = expected_formats[FP32] + 64
     expected_formats[NVFP4] = 64
+    expected_formats[FP8] = N_FP8_GDN_PARENTS
     if FORMAT_COUNTS != expected_formats:
         raise ValueError(f"unexpected NVFP4 format allocation: {FORMAT_COUNTS}")
     expected_layouts = dict(base.LAYOUT_COUNTS)
     expected_layouts[ROW_SPLIT_LAYOUT] = expected_layouts[ROW_SPLIT_LAYOUT] - 64
     expected_layouts[CONTIGUOUS_LAYOUT] = expected_layouts[CONTIGUOUS_LAYOUT] + 64
     expected_layouts[BLOCK_SCALE_LAYOUT] = 64
+    expected_layouts[ROW_SCALE_LAYOUT] = N_FP8_GDN_PARENTS
     if LAYOUT_COUNTS != expected_layouts:
         raise ValueError(f"unexpected NVFP4 layout allocation: {LAYOUT_COUNTS}")
     if any(spec.shape != (24576, 4096) for spec in NVFP4_TENSOR_SPECS if spec.name.endswith("/gate_up")):
         raise ValueError("MLP gate_up NVFP4 shape is invalid")
     if any(spec.shape != (4096, 12288) for spec in NVFP4_TENSOR_SPECS if spec.name.endswith("/down")):
         raise ValueError("MLP down NVFP4 shape is invalid")
+    if any(
+        spec.shape != (12288, 4096)
+        for spec in FP8_GDN_TENSOR_SPECS
+        if spec.name.endswith("/query_key_value_z")
+    ):
+        raise ValueError("GDN query_key_value_z FP8 shape is invalid")
+    if len(FP8_GDN_TENSOR_SPECS) != len(GDN_LAYERS):
+        raise ValueError("FP8 GDN parents must cover every GDN layer exactly once")
 
 
 validate_inventory()
@@ -158,6 +185,8 @@ __all__ = [
     "DRAFT_HEAD_TENSOR_SPECS",
     "FORMAT_COUNTS",
     "FORMAT_NAMES",
+    "FP8",
+    "FP8_GDN_TENSOR_SPECS",
     "FP32",
     "FULL_ATTENTION_LAYERS",
     "GDN_LAYERS",
@@ -168,6 +197,7 @@ __all__ = [
     "LOGICAL_ROW_VIEW_SPECS",
     "MODEL_ID",
     "MTP_TENSOR_SPECS",
+    "N_FP8_GDN_PARENTS",
     "NVFP4",
     "NVFP4_TENSOR_SPECS",
     "OBJECT_SPECS",
@@ -175,6 +205,7 @@ __all__ = [
     "Q5",
     "Q6",
     "RESOURCE_SPECS",
+    "ROW_SCALE_LAYOUT",
     "ResourceSpec",
     "StoredObjectSpec",
     "TARGET_KEY",

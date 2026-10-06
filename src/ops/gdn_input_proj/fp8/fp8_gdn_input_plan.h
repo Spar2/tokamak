@@ -16,6 +16,11 @@ namespace ninfer::ops::detail {
                                                                  std::int32_t min_tokens,
                                                                  std::int32_t max_tokens);
 
+// Ornith-1.5-9B 12288x4096 fused parent workspace.
+[[nodiscard]] std::size_t fp8_gdn_input_4096_workspace_capacity_bytes(LinearPolicy policy,
+                                                                     std::int32_t min_tokens,
+                                                                     std::int32_t max_tokens);
+
 void fp8_gdn_input_decode_launch(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                                  cudaStream_t stream);
 
@@ -24,6 +29,16 @@ void fp8_gdn_input_matrix_launch(const Tensor& x, const Weight& weight, Tensor& 
 
 void fp8_gdn_input_a8_launch(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                              Fp8A8Workspace workspace, cudaStream_t stream);
+
+// Ornith-1.5-9B 12288x4096 fused parent entry points.
+void fp8_gdn_input_4096_decode_launch(const Tensor& x, const Weight& weight, Tensor& qkv,
+                                      Tensor& z, cudaStream_t stream);
+
+void fp8_gdn_input_4096_matrix_launch(const Tensor& x, const Weight& weight, Tensor& qkv,
+                                      Tensor& z, cudaStream_t stream);
+
+void fp8_gdn_input_4096_a8_launch(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
+                                  Fp8A8Workspace workspace, cudaStream_t stream);
 
 // Exact contraction mechanisms shared by G1/G2/G3. Semantic Ops own their route frontier and
 // call one of these launchers after resolving their complete-form plan.

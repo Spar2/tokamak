@@ -14,6 +14,7 @@ from tools.artifact.container import Artifact, ArtifactIdentity, ResourceObject,
 from tools.artifact.layouts import (
     align_up,
     decode_direct,
+    decode_fp8_row_scaled_words,
     decode_nvfp4_words,
     decode_row_split_codes,
     encoded_size,
@@ -22,6 +23,7 @@ from tools.artifact.container import object_alignment
 
 from . import inventory_nvfp4 as inventory
 from . import recipe_nvfp4 as recipe
+from . import recipe_fp8gdn
 from . import verify as base_verify
 from .source import OrnithShardReader
 
@@ -36,6 +38,7 @@ class StructureSummary:
     tensors: int
     resources: int
     nvfp4_weights: int
+    fp8_gdn_weights: int
     input_divisors: int
     payload_bytes: int
 
@@ -90,6 +93,7 @@ def validate_structure(artifact: Artifact) -> tuple[int, StructureSummary]:
         tensors=sum(isinstance(obj, TensorObject) for obj in artifact.objects),
         resources=sum(isinstance(obj, ResourceObject) for obj in artifact.objects),
         nvfp4_weights=len(inventory.NVFP4_TENSOR_SPECS),
+        fp8_gdn_weights=len(inventory.FP8_GDN_TENSOR_SPECS),
         input_divisors=len(inventory.INPUT_SCALE_DIVISOR_SPECS),
         payload_bytes=payload_bytes,
     )
@@ -125,6 +129,27 @@ def verify_nvfp4_mlp(artifact: Artifact, model_dir: str | Path) -> int:
     return count
 
 
+def verify_fp8_gdn(artifact: Artifact, model_dir: str | Path) -> int:
+    count = 0
+    with OrnithShardReader(model_dir) as reader:
+        for spec in inventory.FP8_GDN_TENSOR_SPECS:
+            obj = artifact.find(spec.name)
+            if not isinstance(obj, TensorObject):
+                _error(f"{spec.name} is not a tensor")
+            codes, scales = recipe_fp8gdn.materialize_fp8_gdn_weight(
+                recipe_fp8gdn.FP8_GDN_WEIGHTS_BY_NAME[spec.name], reader
+            )
+            stored_codes, stored_scales = decode_fp8_row_scaled_words(
+                artifact.payload(obj), obj.shape
+            )
+            if not torch.equal(stored_codes, codes) or not torch.equal(
+                stored_scales, scales
+            ):
+                _error(f"{spec.name}: FP8 words differ from the source packing")
+            count += 1
+    return count
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", required=True, type=Path)
@@ -134,16 +159,19 @@ def main(argv: Sequence[str] | None = None) -> None:
     artifact = Artifact(args.artifact)
     _, structure = validate_structure(artifact)
     nvfp4_count = verify_nvfp4_mlp(artifact, args.model)
+    fp8_count = verify_fp8_gdn(artifact, args.model)
     direct_count = base_verify.verify_direct_tensors(artifact, args.model)
     quant_probe_count, quant_rows = base_verify.verify_quantized_tensors(artifact)
     print(
         f"structure: {structure.objects} objects ({structure.tensors} tensors, "
         f"{structure.resources} resources), nvfp4={structure.nvfp4_weights}, "
+        f"fp8gdn={structure.fp8_gdn_weights}, "
         f"divisors={structure.input_divisors}, {structure.payload_bytes} payload bytes",
         flush=True,
     )
     print(
-        f"payloads: {nvfp4_count} NVFP4 probes, {direct_count} direct probes, "
+        f"payloads: {nvfp4_count} NVFP4 probes, {fp8_count} FP8-GDN probes, "
+        f"{direct_count} direct probes, "
         f"{quant_probe_count} quantized probes, {quant_rows} quantized rows",
         flush=True,
     )

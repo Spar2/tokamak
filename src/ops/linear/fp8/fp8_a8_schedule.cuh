@@ -20,6 +20,13 @@ struct Fp8LinearA8ProductionSchedule<Fp8GdnInputGeometry> {
                                 Fp8MmaFragmentPipeline::PingPong, Fp8MmaRaster::TokenFast>;
 };
 
+// Initial A8 schedule mirrors the 5120-wide parent; tune after production binding.
+template <>
+struct Fp8LinearA8ProductionSchedule<Fp8GdnInput4096Geometry> {
+    using Type = Fp8MmaSchedule<64, 128, 128, 2, 4, 2, 2, Cache::cg, Cache::cg,
+                                Fp8MmaFragmentPipeline::PingPong, Fp8MmaRaster::TokenFast>;
+};
+
 template <>
 struct Fp8LinearA8ProductionSchedule<Fp8MlpGateUpGeometry> {
     using Type = Fp8MmaSchedule<64, 128, 128, 2, 4, 2, 2, Cache::cg, Cache::cg,
