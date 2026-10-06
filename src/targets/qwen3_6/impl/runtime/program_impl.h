@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -11897,6 +11898,12 @@ ProgramImplCore::decode_mtp_batch(std::span<const std::uint32_t> lanes,
         DecodeGraphExecutable* executable = nullptr;
         schedule::MtpCausalAttentionEnvelopes envelopes =
             mtp_causal_attention_envelopes(maximum_frontier, draft_window, capacity);
+        static std::size_t diagnostic_last_mtp_batch = 0;
+        if (lanes.size() >= 8 && diagnostic_last_mtp_batch != lanes.size()) {
+            std::fprintf(stderr, "C9TRACE program-mtp batch=%zu graph=%s frontier=%u\n", lanes.size(),
+                         use_cuda_graph ? "on" : "off", maximum_frontier);
+            diagnostic_last_mtp_batch = lanes.size();
+        }
         if (use_cuda_graph) {
             DecodeGraphProfile& profile =
                 select_graph_profile(mtp_graphs, static_cast<std::uint32_t>(lanes.size()),
