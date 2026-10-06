@@ -114,6 +114,11 @@ using Nvfp4MlpGateUpGeometry     = Nvfp4GemvGeometry<34816, 5120>;
 using Nvfp4MlpGateUp4096Geometry = Nvfp4GemvGeometry<24576, 4096>;
 // Ornith-1.5-9B MLP down pilot (W4A16 only): single down_proj, K=12288.
 using Nvfp4MlpDown12288Geometry = Nvfp4GemvGeometry<4096, 12288>;
+// Ornith-1.5-9B vocab projections (W4A16 only): full output head and the
+// row-gathered draft head share K=4096 with the MLP gate_up. Native NVFP4
+// words are preserved from the official checkpoint lm_head object.
+using Nvfp4Head248320Geometry = Nvfp4GemvGeometry<248320, 4096>;
+using Nvfp4Draft131072Geometry = Nvfp4GemvGeometry<131072, 4096>;
 using Nvfp4Residual6144Geometry  = Nvfp4GemvGeometry<5120, 6144>;
 using Nvfp4Residual17408Geometry = Nvfp4GemvGeometry<5120, 17408>;
 
@@ -129,6 +134,8 @@ enum class Nvfp4Problem : std::uint8_t {
     MlpGateUp,
     MlpGateUp4096,
     MlpDown12288,
+    Head248320,
+    Draft131072,
     Residual6144,
     Residual17408,
 };
@@ -144,6 +151,10 @@ inline constexpr bool is_nvfp4_linear_problem(std::int32_t output_rows, std::int
             input_rows == Nvfp4MlpGateUp4096Geometry::kInputRows) ||
            (output_rows == Nvfp4MlpDown12288Geometry::kOutputRows &&
             input_rows == Nvfp4MlpDown12288Geometry::kInputRows) ||
+           (output_rows == Nvfp4Head248320Geometry::kOutputRows &&
+            input_rows == Nvfp4Head248320Geometry::kInputRows) ||
+           (output_rows == Nvfp4Draft131072Geometry::kOutputRows &&
+            input_rows == Nvfp4Draft131072Geometry::kInputRows) ||
            (output_rows == Nvfp4Residual6144Geometry::kOutputRows &&
             input_rows == Nvfp4Residual6144Geometry::kInputRows) ||
            (output_rows == Nvfp4Residual17408Geometry::kOutputRows &&
@@ -170,6 +181,14 @@ inline Nvfp4Problem resolve_nvfp4_problem(std::int32_t output_rows, std::int32_t
     if (output_rows == Nvfp4MlpDown12288Geometry::kOutputRows &&
         input_rows == Nvfp4MlpDown12288Geometry::kInputRows) {
         return Nvfp4Problem::MlpDown12288;
+    }
+    if (output_rows == Nvfp4Head248320Geometry::kOutputRows &&
+        input_rows == Nvfp4Head248320Geometry::kInputRows) {
+        return Nvfp4Problem::Head248320;
+    }
+    if (output_rows == Nvfp4Draft131072Geometry::kOutputRows &&
+        input_rows == Nvfp4Draft131072Geometry::kInputRows) {
+        return Nvfp4Problem::Draft131072;
     }
     if (output_rows == Nvfp4Residual6144Geometry::kOutputRows &&
         input_rows == Nvfp4Residual6144Geometry::kInputRows) {

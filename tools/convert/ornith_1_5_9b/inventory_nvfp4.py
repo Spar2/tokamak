@@ -49,6 +49,8 @@ def _input_scale_after(spec: TensorSpec) -> str | None:
         return prefix + "/gate_up_projection/input_scale_divisor"
     if suffix == "down" and prefix.endswith("/mlp"):
         return prefix + "/down_projection/input_scale_divisor"
+    if suffix == "output_head" and prefix == "text":
+        return prefix + "/output_head_projection/input_scale_divisor"
     return None
 
 
@@ -61,6 +63,11 @@ def _build_text_core_specs() -> tuple[TensorSpec, ...]:
             specs.append(_tensor(_input_scale_after(spec), (), FP32))
             continue
         if original.name.endswith("/mlp/down"):
+            spec = _tensor(original.name, original.shape, NVFP4)
+            specs.append(spec)
+            specs.append(_tensor(_input_scale_after(spec), (), FP32))
+            continue
+        if original.name == "text/output_head":
             spec = _tensor(original.name, original.shape, NVFP4)
             specs.append(spec)
             specs.append(_tensor(_input_scale_after(spec), (), FP32))
@@ -118,33 +125,36 @@ def validate_inventory() -> None:
         len(NVFP4_TENSOR_SPECS),
         len(INPUT_SCALE_DIVISOR_SPECS),
     ) != (
-        len(base.TEXT_CORE_TENSOR_SPECS) + 64,
+        len(base.TEXT_CORE_TENSOR_SPECS) + 65,
         2,
         12,
         333,
-        len(base.TENSOR_SPECS) + 64,
-        len(base.OBJECT_SPECS) + 64,
-        64,
-        64,
+        len(base.TENSOR_SPECS) + 65,
+        len(base.OBJECT_SPECS) + 65,
+        65,
+        65,
     ):
         raise ValueError("registered Ornith NVFP4 inventory is incomplete")
     expected_formats = dict(base.FORMAT_COUNTS)
     expected_formats[Q4] = expected_formats[Q4] - 32
     expected_formats[Q5] = expected_formats[Q5] - 32
-    expected_formats[FP32] = expected_formats[FP32] + 64
-    expected_formats[NVFP4] = 64
+    expected_formats[Q6] = expected_formats[Q6] - 1
+    expected_formats[FP32] = expected_formats[FP32] + 65
+    expected_formats[NVFP4] = 65
     if FORMAT_COUNTS != expected_formats:
         raise ValueError(f"unexpected NVFP4 format allocation: {FORMAT_COUNTS}")
     expected_layouts = dict(base.LAYOUT_COUNTS)
-    expected_layouts[ROW_SPLIT_LAYOUT] = expected_layouts[ROW_SPLIT_LAYOUT] - 64
-    expected_layouts[CONTIGUOUS_LAYOUT] = expected_layouts[CONTIGUOUS_LAYOUT] + 64
-    expected_layouts[BLOCK_SCALE_LAYOUT] = 64
+    expected_layouts[ROW_SPLIT_LAYOUT] = expected_layouts[ROW_SPLIT_LAYOUT] - 65
+    expected_layouts[CONTIGUOUS_LAYOUT] = expected_layouts[CONTIGUOUS_LAYOUT] + 65
+    expected_layouts[BLOCK_SCALE_LAYOUT] = 65
     if LAYOUT_COUNTS != expected_layouts:
         raise ValueError(f"unexpected NVFP4 layout allocation: {LAYOUT_COUNTS}")
     if any(spec.shape != (24576, 4096) for spec in NVFP4_TENSOR_SPECS if spec.name.endswith("/gate_up")):
         raise ValueError("MLP gate_up NVFP4 shape is invalid")
     if any(spec.shape != (4096, 12288) for spec in NVFP4_TENSOR_SPECS if spec.name.endswith("/down")):
         raise ValueError("MLP down NVFP4 shape is invalid")
+    if any(spec.shape != (248320, 4096) for spec in NVFP4_TENSOR_SPECS if spec.name == "text/output_head"):
+        raise ValueError("output_head NVFP4 shape is invalid")
 
 
 validate_inventory()
