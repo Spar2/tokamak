@@ -41,8 +41,8 @@ std::vector<double> read_fp32(const void* device, std::size_t elements) {
 }
 
 void gating_oracle(const std::vector<float>& a, const std::vector<float>& b,
-                   const std::vector<float>& a_log, const std::vector<float>& dt_bias,
-                   std::vector<double>& g, std::vector<double>& beta) {
+                   const std::vector<float>& a_value, const std::vector<float>& dt_bias,
+                   ops::GdnGateFormula formula, std::vector<double>& g, std::vector<double>& beta) {
     g.resize(a.size());
     beta.resize(b.size());
     for (std::size_t i = 0; i < a.size(); ++i) {
@@ -50,13 +50,17 @@ void gating_oracle(const std::vector<float>& a, const std::vector<float>& b,
         const double av        = static_cast<double>(a[i]);
         const double bv        = static_cast<double>(b[i]);
         const double bias      = static_cast<double>(dt_bias[head]);
-        const double scale     = std::exp(static_cast<double>(a_log[head]));
-        g[i]                   = -scale * softplus(av + bias);
-        beta[i]                = sigmoid(bv);
+        const double scale =
+            formula == ops::GdnGateFormula::RawMultiply
+                ? static_cast<double>(a_value[head])
+                : -std::exp(static_cast<double>(a_value[head]));
+        g[i]     = scale * softplus(av + bias);
+        beta[i]  = sigmoid(bv);
     }
 }
 
-int run_case(std::int32_t tokens, std::uint32_t seed, bool stress_transcendentals) {
+int run_case(std::int32_t tokens, std::uint32_t seed, ops::GdnGateFormula formula,
+             bool stress_transcendentals) {
     const std::size_t elements = static_cast<std::size_t>(kHeads) * tokens;
     std::vector<float> a(elements), b(elements), a_log(kHeads), dt_bias(kHeads);
     fill_uniform(a, seed, -8.0F, 8.0F);
@@ -74,7 +78,7 @@ int run_case(std::int32_t tokens, std::uint32_t seed, bool stress_transcendental
     round_to_bf16(b);
 
     std::vector<double> reference_g, reference_beta;
-    gating_oracle(a, b, a_log, dt_bias, reference_g, reference_beta);
+    gating_oracle(a, b, a_log, dt_bias, formula, reference_g, reference_beta);
 
     const std::vector<std::uint16_t> a_bits = bf16_bits(a);
     const std::vector<std::uint16_t> b_bits = bf16_bits(b);
@@ -94,12 +98,13 @@ int run_case(std::int32_t tokens, std::uint32_t seed, bool stress_transcendental
     Tensor tensor_g(device_g.data(), DType::FP32, {kHeads, tokens});
     Tensor tensor_beta(device_beta.data(), DType::FP32, {kHeads, tokens});
 
-    ops::gdn_gating(tensor_a, tensor_b, tensor_a_log, tensor_dt_bias, tensor_g, tensor_beta,
-                    nullptr);
+    ops::gdn_gating(tensor_a, tensor_b, tensor_a_log, tensor_dt_bias, formula, tensor_g,
+                    tensor_beta, nullptr);
     cuda_synchronize();
 
     const std::string label = std::string("gdn_gating T=") + std::to_string(tokens) +
-                              (stress_transcendentals ? " transcendental-range" : "");
+                              (stress_transcendentals ? " transcendental-range" : "") +
+                              (formula == ops::GdnGateFormula::RawMultiply ? " raw" : " exp");
     int failures = 0;
     failures += verify_pointwise((label + " g").c_str(), read_fp32(device_g.data(), elements),
                                  reference_g, kGdnGatingFp32);
@@ -127,11 +132,16 @@ int main() {
     }
 
     int failures = 0;
-    failures += run_case(1, 0x101u, false);
-    failures += run_case(7, 0x202u, false);
-    failures += run_case(128, 0x303u, false);
-    failures += run_case(4096, 0x404u, false);
-    failures += run_case(17, 0x505u, true);
+    constexpr auto kExp = ops::GdnGateFormula::ExpScaled;
+    constexpr auto kRaw = ops::GdnGateFormula::RawMultiply;
+    failures += run_case(1, 0x101u, kExp, false);
+    failures += run_case(7, 0x202u, kExp, false);
+    failures += run_case(128, 0x303u, kExp, false);
+    failures += run_case(4096, 0x404u, kExp, false);
+    failures += run_case(17, 0x505u, kExp, true);
+    failures += run_case(1, 0x601u, kRaw, false);
+    failures += run_case(17, 0x602u, kRaw, true);
+    failures += run_case(128, 0x603u, kRaw, false);
 
     std::cout << (failures == 0 ? "OK" : "FAIL") << " gdn_gating correctness\n";
     return failures == 0 ? 0 : 1;

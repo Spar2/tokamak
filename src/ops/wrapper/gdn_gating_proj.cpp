@@ -97,6 +97,12 @@ void require_execution(DeviceExecutionView execution, const char* op) {
     }
 }
 
+void require_formula(GdnGateFormula formula, const char* op) {
+    if (formula != GdnGateFormula::ExpScaled && formula != GdnGateFormula::RawMultiply) {
+        throw std::invalid_argument(std::string(op) + ": unknown gate formula");
+    }
+}
+
 } // namespace
 
 std::size_t gdn_gating_proj_workspace_capacity_bytes(std::int32_t heads, std::int32_t input_rows,
@@ -115,45 +121,49 @@ std::size_t gdn_norm_gating_proj_workspace_capacity_bytes(std::int32_t heads,
 }
 
 void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_weight,
-                     const Tensor& A_log, const Tensor& dt_bias, WorkspaceArena& ws, Tensor& g,
-                     Tensor& beta, DeviceExecutionView execution) {
+                      const Tensor& A, const Tensor& dt_bias, GdnGateFormula formula,
+                      WorkspaceArena& ws, Tensor& g, Tensor& beta, DeviceExecutionView execution) {
     constexpr const char* op  = "gdn_gating_proj";
     const std::int32_t tokens = x.ne[1];
     const std::int32_t heads  = gating_heads_for_width(x.ne[0], op);
     require_sequence_tensor(x, DType::BF16, x.ne[0], tokens, op, "x");
-    require_vector_tensor(A_log, DType::FP32, heads, op, "A_log");
+    require_vector_tensor(A, DType::FP32, heads, op, "A");
     require_vector_tensor(dt_bias, DType::FP32, heads, op, "dt_bias");
     require_sequence_tensor(g, DType::FP32, heads, tokens, op, "g");
     require_sequence_tensor(beta, DType::FP32, heads, tokens, op, "beta");
     require_bf16_weight(a_weight, heads, x.ne[0], "a_weight");
     require_bf16_weight(b_weight, heads, x.ne[0], "b_weight");
     require_execution(execution, op);
+    require_formula(formula, op);
 
-    detail::bf16_gdn_gating_dispatch(x, a_weight, b_weight, A_log, dt_bias, ws, g, beta, execution);
+    detail::bf16_gdn_gating_dispatch(x, a_weight, b_weight, A, dt_bias, formula, ws, g, beta,
+                                     execution);
 }
 
-void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A_log,
-                     const Tensor& dt_bias, WorkspaceArena& ws, Tensor& g, Tensor& beta,
-                     DeviceExecutionView execution) {
+void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A,
+                      const Tensor& dt_bias, GdnGateFormula formula, WorkspaceArena& ws, Tensor& g,
+                      Tensor& beta, DeviceExecutionView execution) {
     constexpr const char* op                = "gdn_gating_proj";
     const std::int32_t tokens               = x.ne[1];
     const GdnControlParentGeometry geometry = require_bf16_parent(ab_weight);
     require_sequence_tensor(x, DType::BF16, geometry.input_rows, tokens, op, "x");
-    require_vector_tensor(A_log, DType::FP32, geometry.heads, op, "A_log");
+    require_vector_tensor(A, DType::FP32, geometry.heads, op, "A");
     require_vector_tensor(dt_bias, DType::FP32, geometry.heads, op, "dt_bias");
     require_sequence_tensor(g, DType::FP32, geometry.heads, tokens, op, "g");
     require_sequence_tensor(beta, DType::FP32, geometry.heads, tokens, op, "beta");
     require_execution(execution, op);
+    require_formula(formula, op);
 
     const Weight a_weight = bf16_row_view(ab_weight, 0, geometry.heads);
     const Weight b_weight = bf16_row_view(ab_weight, geometry.heads, geometry.heads);
-    detail::bf16_gdn_gating_dispatch(x, a_weight, b_weight, A_log, dt_bias, ws, g, beta, execution);
+    detail::bf16_gdn_gating_dispatch(x, a_weight, b_weight, A, dt_bias, formula, ws, g, beta,
+                                     execution);
 }
 
 void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
-                          const Weight& a_weight, const Weight& b_weight, const Tensor& A_log,
-                          const Tensor& dt_bias, WorkspaceArena& ws, Tensor& h, Tensor& g,
-                          Tensor& beta, DeviceExecutionView execution) {
+                           const Weight& a_weight, const Weight& b_weight, const Tensor& A,
+                           const Tensor& dt_bias, GdnGateFormula formula, WorkspaceArena& ws,
+                           Tensor& h, Tensor& g, Tensor& beta, DeviceExecutionView execution) {
     constexpr const char* op  = "gdn_norm_gating_proj";
     const std::int32_t tokens = x.ne[1];
     if (!(eps > 0.0F) || !std::isfinite(eps)) {
@@ -163,22 +173,23 @@ void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
     require_sequence_tensor(x, DType::BF16, x.ne[0], tokens, op, "x");
     require_vector_tensor(norm_weight, DType::BF16, x.ne[0], op, "norm_weight");
     require_sequence_tensor(h, DType::BF16, x.ne[0], tokens, op, "h");
-    require_vector_tensor(A_log, DType::FP32, heads, op, "A_log");
+    require_vector_tensor(A, DType::FP32, heads, op, "A");
     require_vector_tensor(dt_bias, DType::FP32, heads, op, "dt_bias");
     require_sequence_tensor(g, DType::FP32, heads, tokens, op, "g");
     require_sequence_tensor(beta, DType::FP32, heads, tokens, op, "beta");
     require_bf16_weight(a_weight, heads, x.ne[0], "a_weight");
     require_bf16_weight(b_weight, heads, x.ne[0], "b_weight");
     require_execution(execution, op);
+    require_formula(formula, op);
 
-    detail::bf16_gdn_norm_gating_dispatch(x, norm_weight, eps, h, a_weight, b_weight, A_log,
-                                          dt_bias, ws, g, beta, execution);
+    detail::bf16_gdn_norm_gating_dispatch(x, norm_weight, eps, h, a_weight, b_weight, A, dt_bias,
+                                          formula, ws, g, beta, execution);
 }
 
 void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
-                          const Weight& ab_weight, const Tensor& A_log, const Tensor& dt_bias,
-                          WorkspaceArena& ws, Tensor& h, Tensor& g, Tensor& beta,
-                          DeviceExecutionView execution) {
+                           const Weight& ab_weight, const Tensor& A, const Tensor& dt_bias,
+                           GdnGateFormula formula, WorkspaceArena& ws, Tensor& h, Tensor& g,
+                           Tensor& beta, DeviceExecutionView execution) {
     constexpr const char* op  = "gdn_norm_gating_proj";
     const std::int32_t tokens = x.ne[1];
     if (!(eps > 0.0F) || !std::isfinite(eps)) {
@@ -188,16 +199,17 @@ void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
     require_sequence_tensor(x, DType::BF16, geometry.input_rows, tokens, op, "x");
     require_vector_tensor(norm_weight, DType::BF16, geometry.input_rows, op, "norm_weight");
     require_sequence_tensor(h, DType::BF16, geometry.input_rows, tokens, op, "h");
-    require_vector_tensor(A_log, DType::FP32, geometry.heads, op, "A_log");
+    require_vector_tensor(A, DType::FP32, geometry.heads, op, "A");
     require_vector_tensor(dt_bias, DType::FP32, geometry.heads, op, "dt_bias");
     require_sequence_tensor(g, DType::FP32, geometry.heads, tokens, op, "g");
     require_sequence_tensor(beta, DType::FP32, geometry.heads, tokens, op, "beta");
     require_execution(execution, op);
+    require_formula(formula, op);
 
     const Weight a_weight = bf16_row_view(ab_weight, 0, geometry.heads);
     const Weight b_weight = bf16_row_view(ab_weight, geometry.heads, geometry.heads);
-    detail::bf16_gdn_norm_gating_dispatch(x, norm_weight, eps, h, a_weight, b_weight, A_log,
-                                          dt_bias, ws, g, beta, execution);
+    detail::bf16_gdn_norm_gating_dispatch(x, norm_weight, eps, h, a_weight, b_weight, A, dt_bias,
+                                          formula, ws, g, beta, execution);
 }
 
 } // namespace ninfer::ops

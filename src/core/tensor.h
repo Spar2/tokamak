@@ -32,6 +32,7 @@ enum class QType : std::uint16_t {
     Q5G64_F16S           = 1,
     Q6G64_F16S           = 2,
     W8G32_F16S           = 3,
+    T2G128_F16S          = 9,
     BF16_CTRL            = 4,
     FP32_CTRL            = 5,
     I32_CTRL             = 6,

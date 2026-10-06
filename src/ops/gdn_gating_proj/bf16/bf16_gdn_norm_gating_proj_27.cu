@@ -13,8 +13,8 @@ namespace {
 template <int Tile, int Threads>
 __global__ __launch_bounds__(Threads) void gdn_norm_gating_27_simt(
     const __nv_bfloat16* x, const __nv_bfloat16* nw, const __nv_bfloat16* aw,
-    const __nv_bfloat16* bw, const float* alog, const float* bias, __nv_bfloat16* h, float* g,
-    float* beta, int tokens, float eps) {
+    const __nv_bfloat16* bw, const float* a_value, const float* bias, GdnGateFormula formula,
+    __nv_bfloat16* h, float* g, float* beta, int tokens, float eps) {
     constexpr int D = 5120, H = 48, Warps = Threads / 32;
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5, head = blockIdx.x,
               first = blockIdx.y * Tile;
@@ -69,8 +69,10 @@ __global__ __launch_bounds__(Threads) void gdn_norm_gating_27_simt(
         inverse[tid]    = inv;
         if (first + tid < tokens) {
             const auto i = std::int64_t(first + tid) * H + head;
-            g[i]         = -expf(alog[head]) * softplus(a * inv + bias[head]);
-            beta[i]      = sigmoid(b * inv);
+            g[i]         = (formula == GdnGateFormula::RawMultiply ? a_value[head]
+                                                                  : -expf(a_value[head])) *
+                   softplus(a * inv + bias[head]);
+            beta[i] = sigmoid(b * inv);
         }
     }
     __syncthreads();
@@ -93,8 +95,9 @@ __global__ __launch_bounds__(Threads) void gdn_norm_gating_27_simt(
 
 void bf16_gdn_norm_gating_proj_27_launch(const Tensor& x, const Tensor& norm_weight, float eps,
                                          Tensor& h, const Weight& a_weight, const Weight& b_weight,
-                                         const Tensor& alog, const Tensor& bias, Tensor& g,
-                                         Tensor& beta, cudaStream_t stream) {
+                                         const Tensor& A, const Tensor& bias, Tensor& g,
+                                         Tensor& beta, GdnGateFormula formula,
+                                         cudaStream_t stream) {
     const auto launch = [&]<int T, int Threads>() {
         gdn_norm_gating_27_simt<T, Threads>
             <<<dim3(48, (x.ne[1] + T - 1) / T), Threads, 0, stream>>>(
@@ -102,7 +105,7 @@ void bf16_gdn_norm_gating_proj_27_launch(const Tensor& x, const Tensor& norm_wei
                 static_cast<const __nv_bfloat16*>(norm_weight.data),
                 static_cast<const __nv_bfloat16*>(a_weight.qdata),
                 static_cast<const __nv_bfloat16*>(b_weight.qdata),
-                static_cast<const float*>(alog.data), static_cast<const float*>(bias.data),
+                static_cast<const float*>(A.data), static_cast<const float*>(bias.data), formula,
                 static_cast<__nv_bfloat16*>(h.data), static_cast<float*>(g.data),
                 static_cast<float*>(beta.data), x.ne[1], eps);
     };

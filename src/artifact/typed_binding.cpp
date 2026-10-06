@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <stdexcept>
 
@@ -20,6 +21,7 @@ StorageLayout storage_layout_for(NumericFormat format) {
     case NumericFormat::Q5G64_F16S:
     case NumericFormat::Q6G64_F16S:
     case NumericFormat::W8G32_F16S:
+    case NumericFormat::T2G128_F16S:
         return StorageLayout::RowSplitK128V1;
     case NumericFormat::NVFP4:
         return StorageLayout::BlockScaleK16M128x4V1;
@@ -45,6 +47,8 @@ QType qtype_for(NumericFormat format) {
         return QType::Q6G64_F16S;
     case NumericFormat::W8G32_F16S:
         return QType::W8G32_F16S;
+    case NumericFormat::T2G128_F16S:
+        return QType::T2G128_F16S;
     case NumericFormat::NVFP4:
         return QType::NVFP4;
     case NumericFormat::FP8_E4M3FN_ROW_BF16S:
@@ -190,6 +194,27 @@ Weight materialized_weight(const MaterializedArtifact& materialized, ObjectHandl
         return row_scale_weight(materialized, handle, format, rows, columns);
     }
     return row_split_weight(materialized, handle, format, rows, columns);
+}
+
+RotationHost materialized_rotation(const MaterializedArtifact& materialized,
+                                   const RotationPlan& plan, std::uint32_t expect_sign_width) {
+    const std::span<const std::byte> sign_bytes = materialized.resource_bytes(plan.signs);
+    if (sign_bytes.size() != static_cast<std::size_t>(expect_sign_width) * sizeof(float)) {
+        throw ArtifactError("rotation signs byte size does not match expected width");
+    }
+    if (reinterpret_cast<std::uintptr_t>(sign_bytes.data()) % alignof(float) != 0) {
+        throw ArtifactError("rotation signs are misaligned");
+    }
+    const auto* signs = reinterpret_cast<const float*>(sign_bytes.data());
+    for (std::uint32_t i = 0; i < expect_sign_width; ++i) {
+        if (signs[i] != 1.0F && signs[i] != -1.0F) {
+            throw ArtifactError("rotation sign vector must contain only +/-1");
+        }
+    }
+    return RotationHost{
+        std::span<const float>(signs, expect_sign_width),
+        materialized.resource_bytes(plan.spec),
+    };
 }
 
 } // namespace ninfer::artifact

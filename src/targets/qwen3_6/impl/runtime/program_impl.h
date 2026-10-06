@@ -10905,8 +10905,10 @@ qwen3_6::PagedKVCacheView ProgramImplCore::mtp_kv_view(const SequenceState& sequ
 }
 
 void ProgramImplCore::set_device_i32(Tensor& tensor, std::int32_t value) {
-    CUDA_CHECK(
-        cudaMemcpyAsync(tensor.data, &value, sizeof(value), cudaMemcpyHostToDevice, device.stream));
+    // Synchronous: the source is a stack parameter that dies at return, while
+    // consumers run later on device.stream. Async H2D from pageable stack
+    // memory may not complete before scope exit (M5 stream-sync finding).
+    CUDA_CHECK(cudaMemcpy(tensor.data, &value, sizeof(value), cudaMemcpyHostToDevice));
 }
 
 void ProgramImplCore::ordered_reset(SequenceState& sequence) {
@@ -11495,8 +11497,10 @@ ProgramImplCore::advance_prefill(SequenceState& sequence, RequestControl& reques
             } else {
                 Tensor bridge_token = io.mtp->target_input_ids.slice(0, 0, 1);
                 const TokenId token = staged.prompt.token_ids[staged.base];
-                CUDA_CHECK(cudaMemcpyAsync(bridge_token.data, &token, sizeof(token),
-                                           cudaMemcpyHostToDevice, device.stream));
+                // Synchronous: stack `token` dies at block exit; consumers run
+                // later on device.stream (M5 stream-sync finding).
+                CUDA_CHECK(cudaMemcpy(bridge_token.data, &token, sizeof(token),
+                                       cudaMemcpyHostToDevice));
                 schedule::mtp_bridge_and_propose(schedule_state, bridge_token, previous_hidden,
                                                  bridge.position, bridge.rope_position, false);
             }

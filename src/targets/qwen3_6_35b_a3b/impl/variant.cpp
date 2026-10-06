@@ -211,7 +211,8 @@ void Variant::gdn_norm_control_projection(const Tensor& residual, const Tensor& 
                                           WorkspaceArena& workspace,
                                           DeviceExecutionView execution) {
     ops::gdn_norm_gating_proj(residual, norm_weight, eps, weights.a_b_projection, weights.a_log,
-                              weights.dt_bias, workspace, hidden, g, beta, execution);
+                               weights.dt_bias, ops::GdnGateFormula::ExpScaled, workspace, hidden,
+                               g, beta, execution);
 }
 
 void Variant::post_mixer(const Tensor& hidden, const PostMixerWeights& weights, Tensor& residual,

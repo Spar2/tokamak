@@ -30,6 +30,12 @@ constexpr ReductionCriterion kCausalConvA16Criterion{
 constexpr std::uint8_t kOutputPoison = 0xff;
 
 std::size_t offset(std::int32_t c, std::int32_t column, std::int32_t C) {
+    // LOAD-BEARING byte-order contract (see causal_conv1d_silu.h): weight and
+    // state bytes are tap/position-major ([4,C] and [3,C] order), presented
+    // via logical Tensor{C,4} / Tensor{C,3} descriptors. Tap j of channel c
+    // lives at flat slot j*C+c. Do NOT "fix" this to C-order: the kernels
+    // consume this order, and the Bonsai layer-8 block harness stages GGUF
+    // bytes accordingly (verified against the live model).
     return static_cast<std::size_t>(column) * static_cast<std::size_t>(C) +
            static_cast<std::size_t>(c);
 }

@@ -118,8 +118,9 @@ __global__ void bf16_gdn_gating_proj_small_t_partial_kernel(
 }
 
 __global__ void bf16_gdn_gating_proj_small_t_reduce_kernel(const float* __restrict__ partial,
-                                                           const float* __restrict__ A_log,
+                                                           const float* __restrict__ A,
                                                            const float* __restrict__ dt_bias,
+                                                           GdnGateFormula formula,
                                                            float* __restrict__ g,
                                                            float* __restrict__ beta,
                                                            std::int32_t t) {
@@ -141,14 +142,15 @@ __global__ void bf16_gdn_gating_proj_small_t_reduce_kernel(const float* __restri
 
     const std::int64_t out_index = static_cast<std::int64_t>(token) * kN + row;
     const float sp               = softplus(acc_a + dt_bias[row]);
-    g[out_index]                 = -expf(A_log[row]) * sp;
+    g[out_index]                 = (formula == GdnGateFormula::RawMultiply ? A[row] : -expf(A[row])) * sp;
     beta[out_index]              = sigmoid(acc_b);
 }
 
 __global__ void bf16_gdn_gating_proj_gemv_kernel(const __nv_bfloat16* x,
                                                  const __nv_bfloat16* a_weight,
-                                                 const __nv_bfloat16* b_weight, const float* A_log,
-                                                 const float* dt_bias, float* g, float* beta) {
+                                                 const __nv_bfloat16* b_weight, const float* A,
+                                                 const float* dt_bias, GdnGateFormula formula,
+                                                 float* g, float* beta) {
     const int global_row = static_cast<int>(blockIdx.x);
     const bool is_b      = global_row >= kN;
     const int row        = is_b ? global_row - kN : global_row;
@@ -174,7 +176,7 @@ __global__ void bf16_gdn_gating_proj_gemv_kernel(const __nv_bfloat16* x,
             beta[row] = sigmoid(acc);
         } else {
             const float sp = softplus(acc + dt_bias[row]);
-            g[row]         = -expf(A_log[row]) * sp;
+            g[row]         = (formula == GdnGateFormula::RawMultiply ? A[row] : -expf(A[row])) * sp;
         }
     }
 }
@@ -183,8 +185,9 @@ template <int ColsPerTile>
 __global__ void bf16_gdn_gating_proj_35_simt_kernel(const __nv_bfloat16* __restrict__ x,
                                                     const __nv_bfloat16* __restrict__ a_weight,
                                                     const __nv_bfloat16* __restrict__ b_weight,
-                                                    const float* __restrict__ A_log,
+                                                    const float* __restrict__ A,
                                                     const float* __restrict__ dt_bias,
+                                                    GdnGateFormula formula,
                                                     float* __restrict__ g, float* __restrict__ beta,
                                                     std::int32_t t) {
     static_assert(ColsPerTile == 4 || ColsPerTile == 8);
@@ -238,7 +241,9 @@ __global__ void bf16_gdn_gating_proj_35_simt_kernel(const __nv_bfloat16* __restr
                 if (is_b) {
                     beta[out_index] = sigmoid(sum);
                 } else {
-                    g[out_index] = -expf(A_log[row]) * softplus(sum + dt_bias[row]);
+                    g[out_index] =
+                        (formula == GdnGateFormula::RawMultiply ? A[row] : -expf(A[row])) *
+                        softplus(sum + dt_bias[row]);
                 }
             }
         }
@@ -288,9 +293,10 @@ template <class Geometry, int SplitK, int Warps = kBf16GdnWarps, bool NormalizeI
           int NormTokenCapacity = 0>
 bool launch_bf16_prefill_mma(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                              const Tensor* norm_weight, float norm_eps, Tensor* normalized_x,
-                             const Weight& a_weight, const Weight& b_weight, const Tensor& A_log,
-                             const Tensor& dt_bias, void* workspace, Tensor& g, Tensor& beta,
-                             cudaStream_t stream, std::int32_t multiprocessor_count = 0) {
+                              const Weight& a_weight, const Weight& b_weight, const Tensor& A,
+                              const Tensor& dt_bias, void* workspace, Tensor& g, Tensor& beta,
+                              GdnGateFormula formula, cudaStream_t stream,
+                              std::int32_t multiprocessor_count = 0) {
     constexpr int kBlockN    = Geometry::kBlockN;
     constexpr int kSmemBytes = kBf16GdnSmemBytes<kBlockN>;
     const dim3 block(Warps * 32);
@@ -330,8 +336,8 @@ bool launch_bf16_prefill_mma(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                         : static_cast<__nv_bfloat16*>(nullptr),
                     norm_eps, static_cast<const __nv_bfloat16*>(a_weight.qdata),
                     static_cast<const __nv_bfloat16*>(b_weight.qdata),
-                    static_cast<const float*>(A_log.data), static_cast<const float*>(dt_bias.data),
-                    static_cast<float*>(workspace), static_cast<float*>(launch_g.data),
+                    static_cast<const float*>(A.data), static_cast<const float*>(dt_bias.data),
+                    formula, static_cast<float*>(workspace), static_cast<float*>(launch_g.data),
                     static_cast<float*>(launch_beta.data), launch_t));
             } else {
                 bf16_gdn_gating_proj_gemm_mma_kernel<Geometry, SplitK, FullTokens, Warps,
@@ -346,8 +352,9 @@ bool launch_bf16_prefill_mma(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                             : static_cast<__nv_bfloat16*>(nullptr),
                         norm_eps, static_cast<const __nv_bfloat16*>(a_weight.qdata),
                         static_cast<const __nv_bfloat16*>(b_weight.qdata),
-                        static_cast<const float*>(A_log.data),
-                        static_cast<const float*>(dt_bias.data), static_cast<float*>(workspace),
+                        static_cast<const float*>(A.data),
+                        static_cast<const float*>(dt_bias.data), formula,
+                        static_cast<float*>(workspace),
                         static_cast<float*>(launch_g.data), static_cast<float*>(launch_beta.data),
                         launch_t);
             }
@@ -411,25 +418,25 @@ bool launch_bf16_prefill_mma(Bf16GdnGatingTokenVariant variant, const Tensor& x,
 } // namespace
 
 void bf16_gdn_gating_proj_gemv_launch(const Tensor& x, const Weight& a_weight,
-                                      const Weight& b_weight, const Tensor& A_log,
+                                      const Weight& b_weight, const Tensor& A,
                                       const Tensor& dt_bias, Tensor& g, Tensor& beta,
-                                      cudaStream_t stream) {
+                                      GdnGateFormula formula, cudaStream_t stream) {
     require_shape(a_weight, "a_weight");
     require_shape(b_weight, "b_weight");
     bf16_gdn_gating_proj_gemv_kernel<<<2 * kN, kThreads, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data),
         static_cast<const __nv_bfloat16*>(a_weight.qdata),
-        static_cast<const __nv_bfloat16*>(b_weight.qdata), static_cast<const float*>(A_log.data),
-        static_cast<const float*>(dt_bias.data), static_cast<float*>(g.data),
+        static_cast<const __nv_bfloat16*>(b_weight.qdata), static_cast<const float*>(A.data),
+        static_cast<const float*>(dt_bias.data), formula, static_cast<float*>(g.data),
         static_cast<float*>(beta.data));
     CUDA_CHECK(cudaGetLastError());
 }
 
 void bf16_gdn_gating_proj_small_t_split10_launch(const Tensor& x, const Weight& a_weight,
-                                                 const Weight& b_weight, const Tensor& A_log,
+                                                 const Weight& b_weight, const Tensor& A,
                                                  const Tensor& dt_bias, void* workspace,
                                                  std::size_t workspace_bytes, Tensor& g,
-                                                 Tensor& beta, cudaStream_t stream) {
+                                                 Tensor& beta, GdnGateFormula formula, cudaStream_t stream) {
     require_shape(a_weight, "a_weight");
     require_shape(b_weight, "b_weight");
     const std::int32_t t       = x.ne[1];
@@ -454,58 +461,58 @@ void bf16_gdn_gating_proj_small_t_split10_launch(const Tensor& x, const Weight& 
     const int reduce_elems       = kN * t;
     const int reduce_blocks      = div_up(reduce_elems, kReduceThreads);
     bf16_gdn_gating_proj_small_t_reduce_kernel<<<reduce_blocks, kReduceThreads, 0, stream>>>(
-        static_cast<const float*>(workspace), static_cast<const float*>(A_log.data),
-        static_cast<const float*>(dt_bias.data), static_cast<float*>(g.data),
+        static_cast<const float*>(workspace), static_cast<const float*>(A.data),
+        static_cast<const float*>(dt_bias.data), formula, static_cast<float*>(g.data),
         static_cast<float*>(beta.data), t);
     CUDA_CHECK(cudaGetLastError());
 }
 
 bool bf16_gdn_gating_proj_mma_split8_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                             const Weight& a_weight, const Weight& b_weight,
-                                            const Tensor& A_log, const Tensor& dt_bias,
+                                            const Tensor& A, const Tensor& dt_bias,
                                             void* workspace, Tensor& g, Tensor& beta,
                                             std::int32_t multiprocessor_count,
-                                            cudaStream_t stream) {
+                                            GdnGateFormula formula, cudaStream_t stream) {
     return launch_bf16_prefill_mma<Bf16Gdn27Geometry, 8, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 bool bf16_gdn_gating_proj_mma_split4_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                             const Weight& a_weight, const Weight& b_weight,
-                                            const Tensor& A_log, const Tensor& dt_bias,
+                                            const Tensor& A, const Tensor& dt_bias,
                                             void* workspace, Tensor& g, Tensor& beta,
                                             std::int32_t multiprocessor_count,
-                                            cudaStream_t stream) {
+                                            GdnGateFormula formula, cudaStream_t stream) {
     return launch_bf16_prefill_mma<Bf16Gdn27Geometry, 4>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 bool bf16_gdn_gating_proj_mma_split2_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                             const Weight& a_weight, const Weight& b_weight,
-                                            const Tensor& A_log, const Tensor& dt_bias,
+                                            const Tensor& A, const Tensor& dt_bias,
                                             void* workspace, Tensor& g, Tensor& beta,
                                             std::int32_t multiprocessor_count,
-                                            cudaStream_t stream) {
+                                            GdnGateFormula formula, cudaStream_t stream) {
     return launch_bf16_prefill_mma<Bf16Gdn27Geometry, 2>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 void bf16_gdn_gating_proj_mma_unsplit_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                              const Weight& a_weight, const Weight& b_weight,
-                                             const Tensor& A_log, const Tensor& dt_bias, Tensor& g,
-                                             Tensor& beta, cudaStream_t stream) {
+                                             const Tensor& A, const Tensor& dt_bias, Tensor& g,
+                                             Tensor& beta, GdnGateFormula formula, cudaStream_t stream) {
     (void)launch_bf16_prefill_mma<Bf16Gdn27Geometry, 1, 8>(variant, x, nullptr, 0.0F, nullptr,
-                                                           a_weight, b_weight, A_log, dt_bias,
-                                                           nullptr, g, beta, stream);
+                                                           a_weight, b_weight, A, dt_bias,
+                                                            nullptr, g, beta, formula, stream);
 }
 
 template <int ColsPerTile>
 void launch_35_simt(const Tensor& x, const Weight& a_weight, const Weight& b_weight,
-                    const Tensor& A_log, const Tensor& dt_bias, Tensor& g, Tensor& beta,
-                    cudaStream_t stream) {
+                    const Tensor& A, const Tensor& dt_bias, Tensor& g, Tensor& beta,
+                    GdnGateFormula formula, cudaStream_t stream) {
     require_shape35(a_weight, "a_weight");
     require_shape35(b_weight, "b_weight");
     const dim3 grid(static_cast<unsigned>(k35LogicalRows),
@@ -513,51 +520,51 @@ void launch_35_simt(const Tensor& x, const Weight& a_weight, const Weight& b_wei
     bf16_gdn_gating_proj_35_simt_kernel<ColsPerTile><<<grid, 32, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data),
         static_cast<const __nv_bfloat16*>(a_weight.qdata),
-        static_cast<const __nv_bfloat16*>(b_weight.qdata), static_cast<const float*>(A_log.data),
-        static_cast<const float*>(dt_bias.data), static_cast<float*>(g.data),
+        static_cast<const __nv_bfloat16*>(b_weight.qdata), static_cast<const float*>(A.data),
+        static_cast<const float*>(dt_bias.data), formula, static_cast<float*>(g.data),
         static_cast<float*>(beta.data), x.ne[1]);
     CUDA_CHECK(cudaGetLastError());
 }
 
 void bf16_gdn_gating_proj_35_simt_c4_launch(const Tensor& x, const Weight& a_weight,
-                                            const Weight& b_weight, const Tensor& A_log,
+                                            const Weight& b_weight, const Tensor& A,
                                             const Tensor& dt_bias, Tensor& g, Tensor& beta,
-                                            cudaStream_t stream) {
-    launch_35_simt<4>(x, a_weight, b_weight, A_log, dt_bias, g, beta, stream);
+                                            GdnGateFormula formula, cudaStream_t stream) {
+    launch_35_simt<4>(x, a_weight, b_weight, A, dt_bias, g, beta, formula, stream);
 }
 
 void bf16_gdn_gating_proj_35_simt_c8_launch(const Tensor& x, const Weight& a_weight,
-                                            const Weight& b_weight, const Tensor& A_log,
+                                            const Weight& b_weight, const Tensor& A,
                                             const Tensor& dt_bias, Tensor& g, Tensor& beta,
-                                            cudaStream_t stream) {
-    launch_35_simt<8>(x, a_weight, b_weight, A_log, dt_bias, g, beta, stream);
+                                            GdnGateFormula formula, cudaStream_t stream) {
+    launch_35_simt<8>(x, a_weight, b_weight, A, dt_bias, g, beta, formula, stream);
 }
 
 bool bf16_gdn_gating_proj_35_mma_split32_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                                 const Weight& a_weight, const Weight& b_weight,
-                                                const Tensor& A_log, const Tensor& dt_bias,
+                                                const Tensor& A, const Tensor& dt_bias,
                                                 void* workspace, Tensor& g, Tensor& beta,
                                                 std::int32_t multiprocessor_count,
-                                                cudaStream_t stream) {
+                                                GdnGateFormula formula, cudaStream_t stream) {
     require_shape35(a_weight, "a_weight");
     require_shape35(b_weight, "b_weight");
     return launch_bf16_prefill_mma<Bf16Gdn35Geometry, 32, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 bool bf16_gdn_norm_gating_proj_35_mma_split32_launch(
     Bf16GdnGatingTokenVariant variant, const Tensor& x, const Tensor& norm_weight, float eps,
-    Tensor& h, const Weight& a_weight, const Weight& b_weight, const Tensor& A_log,
+    Tensor& h, const Weight& a_weight, const Weight& b_weight, const Tensor& A,
     const Tensor& dt_bias, void* workspace, Tensor& g, Tensor& beta,
-    std::int32_t multiprocessor_count, cudaStream_t stream) {
+    std::int32_t multiprocessor_count, GdnGateFormula formula, cudaStream_t stream) {
     require_shape35(a_weight, "a_weight");
     require_shape35(b_weight, "b_weight");
     const auto launch = [&](auto token_capacity) -> bool {
         constexpr int TokenCapacity = decltype(token_capacity)::value;
         return launch_bf16_prefill_mma<Bf16Gdn35Geometry, 32, 8, true, TokenCapacity>(
-            variant, x, &norm_weight, eps, &h, a_weight, b_weight, A_log, dt_bias, workspace, g,
-            beta, stream, multiprocessor_count);
+            variant, x, &norm_weight, eps, &h, a_weight, b_weight, A, dt_bias, workspace, g,
+            beta, formula, stream, multiprocessor_count);
     };
     if (x.ne[1] <= 6) {
         return launch(std::integral_constant<int, 6>{});
@@ -574,120 +581,120 @@ bool bf16_gdn_norm_gating_proj_35_mma_split32_launch(
 
 bool bf16_gdn_gating_proj_35_mma_split16_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                                 const Weight& a_weight, const Weight& b_weight,
-                                                const Tensor& A_log, const Tensor& dt_bias,
+                                                const Tensor& A, const Tensor& dt_bias,
                                                 void* workspace, Tensor& g, Tensor& beta,
                                                 std::int32_t multiprocessor_count,
-                                                cudaStream_t stream) {
+                                                GdnGateFormula formula, cudaStream_t stream) {
     require_shape35(a_weight, "a_weight");
     require_shape35(b_weight, "b_weight");
     return launch_bf16_prefill_mma<Bf16Gdn35Geometry, 16, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 bool bf16_gdn_gating_proj_35_mma_split8_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                                const Weight& a_weight, const Weight& b_weight,
-                                               const Tensor& A_log, const Tensor& dt_bias,
+                                               const Tensor& A, const Tensor& dt_bias,
                                                void* workspace, Tensor& g, Tensor& beta,
                                                std::int32_t multiprocessor_count,
-                                               cudaStream_t stream) {
+                                               GdnGateFormula formula, cudaStream_t stream) {
     require_shape35(a_weight, "a_weight");
     require_shape35(b_weight, "b_weight");
     return launch_bf16_prefill_mma<Bf16Gdn35Geometry, 8, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 bool bf16_gdn_gating_proj_35_mma_split4_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                                const Weight& a_weight, const Weight& b_weight,
-                                               const Tensor& A_log, const Tensor& dt_bias,
+                                               const Tensor& A, const Tensor& dt_bias,
                                                void* workspace, Tensor& g, Tensor& beta,
                                                std::int32_t multiprocessor_count,
-                                               cudaStream_t stream) {
+                                               GdnGateFormula formula, cudaStream_t stream) {
     require_shape35(a_weight, "a_weight");
     require_shape35(b_weight, "b_weight");
     return launch_bf16_prefill_mma<Bf16Gdn35Geometry, 4, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 bool bf16_gdn_gating_proj_35_mma_split2_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                                const Weight& a_weight, const Weight& b_weight,
-                                               const Tensor& A_log, const Tensor& dt_bias,
+                                               const Tensor& A, const Tensor& dt_bias,
                                                void* workspace, Tensor& g, Tensor& beta,
                                                std::int32_t multiprocessor_count,
-                                               cudaStream_t stream) {
+                                               GdnGateFormula formula, cudaStream_t stream) {
     require_shape35(a_weight, "a_weight");
     require_shape35(b_weight, "b_weight");
     return launch_bf16_prefill_mma<Bf16Gdn35Geometry, 2, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 void bf16_gdn_gating_proj_35_mma_unsplit_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                                  const Weight& a_weight, const Weight& b_weight,
-                                                 const Tensor& A_log, const Tensor& dt_bias,
-                                                 Tensor& g, Tensor& beta, cudaStream_t stream) {
+                                                 const Tensor& A, const Tensor& dt_bias,
+                                                 Tensor& g, Tensor& beta, GdnGateFormula formula, cudaStream_t stream) {
     require_shape35(a_weight, "a_weight");
     require_shape35(b_weight, "b_weight");
     (void)launch_bf16_prefill_mma<Bf16Gdn35Geometry, 1, 8>(variant, x, nullptr, 0.0F, nullptr,
-                                                           a_weight, b_weight, A_log, dt_bias,
-                                                           nullptr, g, beta, stream);
+                                                           a_weight, b_weight, A, dt_bias,
+                                                            nullptr, g, beta, formula, stream);
 }
 
 bool bf16_gdn_gating_proj_9_mma_split16_launch(
     Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
-    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace,
-    Tensor& g, Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream) {
+    const Weight& b_weight, const Tensor& A, const Tensor& dt_bias, void* workspace,
+    Tensor& g, Tensor& beta, std::int32_t multiprocessor_count, GdnGateFormula formula, cudaStream_t stream) {
     require_shape9(a_weight, "a_weight");
     require_shape9(b_weight, "b_weight");
     return launch_bf16_prefill_mma<Bf16Gdn9Geometry, 16, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 bool bf16_gdn_gating_proj_9_mma_split8_launch(
     Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
-    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace,
-    Tensor& g, Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream) {
+    const Weight& b_weight, const Tensor& A, const Tensor& dt_bias, void* workspace,
+    Tensor& g, Tensor& beta, std::int32_t multiprocessor_count, GdnGateFormula formula, cudaStream_t stream) {
     require_shape9(a_weight, "a_weight");
     require_shape9(b_weight, "b_weight");
     return launch_bf16_prefill_mma<Bf16Gdn9Geometry, 8, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 bool bf16_gdn_gating_proj_9_mma_split4_launch(
     Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
-    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace,
-    Tensor& g, Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream) {
+    const Weight& b_weight, const Tensor& A, const Tensor& dt_bias, void* workspace,
+    Tensor& g, Tensor& beta, std::int32_t multiprocessor_count, GdnGateFormula formula, cudaStream_t stream) {
     require_shape9(a_weight, "a_weight");
     require_shape9(b_weight, "b_weight");
     return launch_bf16_prefill_mma<Bf16Gdn9Geometry, 4, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 bool bf16_gdn_gating_proj_9_mma_split2_launch(
     Bf16GdnGatingTokenVariant variant, const Tensor& x, const Weight& a_weight,
-    const Weight& b_weight, const Tensor& A_log, const Tensor& dt_bias, void* workspace,
-    Tensor& g, Tensor& beta, std::int32_t multiprocessor_count, cudaStream_t stream) {
+    const Weight& b_weight, const Tensor& A, const Tensor& dt_bias, void* workspace,
+    Tensor& g, Tensor& beta, std::int32_t multiprocessor_count, GdnGateFormula formula, cudaStream_t stream) {
     require_shape9(a_weight, "a_weight");
     require_shape9(b_weight, "b_weight");
     return launch_bf16_prefill_mma<Bf16Gdn9Geometry, 2, 8>(
-        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A_log, dt_bias, workspace, g, beta,
-        stream, multiprocessor_count);
+        variant, x, nullptr, 0.0F, nullptr, a_weight, b_weight, A, dt_bias, workspace, g, beta,
+        formula, stream, multiprocessor_count);
 }
 
 void bf16_gdn_gating_proj_9_mma_unsplit_launch(Bf16GdnGatingTokenVariant variant, const Tensor& x,
                                                const Weight& a_weight, const Weight& b_weight,
-                                               const Tensor& A_log, const Tensor& dt_bias,
-                                               Tensor& g, Tensor& beta, cudaStream_t stream) {
+                                               const Tensor& A, const Tensor& dt_bias,
+                                               Tensor& g, Tensor& beta, GdnGateFormula formula, cudaStream_t stream) {
     require_shape9(a_weight, "a_weight");
     require_shape9(b_weight, "b_weight");
     launch_bf16_prefill_mma<Bf16Gdn9Geometry, 1, 8>(variant, x, nullptr, 0.0F, nullptr, a_weight,
-                                                    b_weight, A_log, dt_bias, nullptr, g, beta,
-                                                    stream);
+                                                     b_weight, A, dt_bias, nullptr, g, beta,
+                                                     formula, stream);
 }
 
 } // namespace ninfer::ops::detail

@@ -296,6 +296,30 @@ ninfer_add_op_test(ninfer_kv_cache_append_test
 ninfer_add_op_test(ninfer_rmsnorm_rope_test
   SOURCES ops/test_rmsnorm_rope.cpp
   LIBRARIES ninfer_ops)
+ninfer_add_op_test(ninfer_t2_fwht_test
+  SOURCES ops/test_t2_fwht.cpp
+  LIBRARIES ninfer_ops)
+ninfer_add_op_test(ninfer_bq2_block8_test
+  SOURCES ops/test_bq2_block8.cpp
+  LIBRARIES ninfer_ops ninfer_artifact)
+ninfer_add_op_test(ninfer_bq2_block7_test
+  SOURCES ops/test_bq2_block7.cpp
+  LIBRARIES ninfer_ops ninfer_artifact)
+ninfer_add_op_test(ninfer_bq2_embed_test
+  SOURCES ops/test_bq2_embed.cpp
+  LIBRARIES ninfer_ops ninfer_artifact)
+ninfer_add_op_test(ninfer_bq2_chain03_test
+  SOURCES ops/test_bq2_chain03.cpp
+  LIBRARIES ninfer_ops ninfer_artifact)
+ninfer_add_op_test(ninfer_bq2_chain_decode_test
+  SOURCES ops/test_bq2_chain_decode.cpp
+  LIBRARIES ninfer_ops ninfer_artifact)
+ninfer_add_op_test(ninfer_bq2_chain63_test
+  SOURCES ops/test_bq2_chain63.cpp
+  LIBRARIES ninfer_ops ninfer_artifact)
+ninfer_add_op_test(ninfer_bq2_chain_gen_test
+  SOURCES ops/test_bq2_chain_gen.cpp
+  LIBRARIES ninfer_ops ninfer_artifact)
 ninfer_add_op_test(ninfer_context_kv_materialize_test
   SOURCES ops/test_context_kv_materialize.cpp
   LIBRARIES ninfer_ops)
@@ -326,6 +350,7 @@ ninfer_add_linear_test(ninfer_linear_q4_a16_test ops/linear/test_q4_a16.cpp)
 ninfer_add_linear_test(ninfer_linear_q5_a16_test ops/linear/test_q5_a16.cpp)
 ninfer_add_linear_test(ninfer_linear_q6_a16_test ops/linear/test_q6_a16.cpp)
 ninfer_add_linear_test(ninfer_linear_w8_a16_test ops/linear/test_w8_a16.cpp)
+ninfer_add_linear_test(ninfer_linear_t2_a16_test ops/linear/test_t2_a16.cpp)
 ninfer_add_linear_test(ninfer_linear_nvfp4_a16_test ops/linear/test_nvfp4_a16.cpp)
 ninfer_add_linear_test(ninfer_linear_nvfp4_a4_test ops/linear/test_nvfp4_a4.cpp)
 ninfer_add_linear_test(ninfer_linear_fp8_a16_test ops/linear/test_fp8_a16.cpp)

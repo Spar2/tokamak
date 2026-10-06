@@ -110,11 +110,11 @@ struct head_map {
     NINFER_KERNELS_HOST_DEVICE int group_size() const { return H_v / H_qk; }
 
     NINFER_KERNELS_HOST_DEVICE int qk_head(int h_v) const {
-#if defined(__CUDA_ARCH__)
-        return static_cast<int>(fastdiv(static_cast<std::uint32_t>(h_v), group_magic));
-#else
-        return h_v / group_size();
-#endif
+        // Prism-true GDN head map: v-head h_v shares q/k head h_v % H_qk
+        // (fused kernel iq1 = iv1 % neq1; unfused path tiles q/k with
+        // ggml_repeat, which cycles heads). The old h_v / group_size()
+        // (contiguous grouping) matches no reference path.
+        return h_v % H_qk;
     }
 };
 

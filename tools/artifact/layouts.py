@@ -104,7 +104,7 @@ CONTIGUOUS_LE_V1 = Layout(
 ROW_SPLIT_K128_V1 = Layout(
     "row-split-k128-v1",
     256,
-    frozenset(("Q4G64_F16S", "Q5G64_F16S", "Q6G64_F16S", "W8G32_F16S")),
+    frozenset(("Q4G64_F16S", "Q5G64_F16S", "Q6G64_F16S", "W8G32_F16S", "T2G128_F16S")),
 )
 BLOCKSCALE_K16_M128X4_V1 = Layout(
     "blockscale-k16-m128x4-v1",
@@ -188,9 +188,13 @@ def row_split_geometry(
     n, k = _shape(shape, rank=2)
     k_pad = align_up(k, K_ALIGNMENT)
     groups_per_row = k_pad // spec.group_size
-    base_bytes_per_group = spec.group_size if spec.bits == 8 else spec.group_size // 2
+    base_bytes_per_group = (
+        spec.group_size
+        if spec.bits == 8
+        else (spec.group_size // 4 if spec.bits == 2 else spec.group_size // 2)
+    )
     high_bytes_per_group = (
-        0 if spec.bits in (4, 8) else spec.group_size * (spec.bits - 4) // 8
+        0 if spec.bits in (2, 4, 8) else spec.group_size * (spec.bits - 4) // 8
     )
     base_row_bytes = groups_per_row * base_bytes_per_group
     high_row_bytes = groups_per_row * high_bytes_per_group
@@ -624,10 +628,31 @@ def _pack_high_bits(codes: torch.Tensor, bits: int) -> torch.Tensor:
     return out
 
 
+def _pack_2bit(codes: torch.Tensor) -> torch.Tensor:
+    """Pack SIGNED logical ternary codes {-1,0,+1} (+2 reserved) LSB-first
+    (Prism PQ2 order: byte j//4, shift (j%4)*2). Stored code = (value + 1)."""
+    groups, group_size = codes.shape
+    assert group_size % 4 == 0
+    out = torch.empty((groups, group_size // 4), dtype=torch.uint8, device=codes.device)
+    chunk = max(1, _PACK_TEMP_BYTES // max(1, group_size))
+    for begin in range(0, groups, chunk):
+        end = min(groups, begin + chunk)
+        u = (codes[begin:end].to(torch.int32) + 1) & 0x03
+        out[begin:end] = (
+            u[:, 0::4] | (u[:, 1::4] << 2) | (u[:, 2::4] << 4) | (u[:, 3::4] << 6)
+        ).to(torch.uint8)
+    return out
+
+
 def _pack_codes(codes: torch.Tensor, spec: QuantFormat) -> tuple[torch.Tensor, torch.Tensor]:
     if spec.bits == 8:
         return (
             codes.contiguous().view(torch.uint8),
+            torch.empty((codes.shape[0], 0), dtype=torch.uint8, device=codes.device),
+        )
+    if spec.bits == 2:
+        return (
+            _pack_2bit(codes),
             torch.empty((codes.shape[0], 0), dtype=torch.uint8, device=codes.device),
         )
     base = _pack_low_nibbles(codes)
@@ -898,7 +923,7 @@ def _high_indices(
     device = torch.device(device_type) if device_index is None else torch.device(
         device_type, device_index
     )
-    if bits in (4, 8):
+    if bits in (2, 4, 8):
         empty = torch.empty(0, dtype=torch.long, device=device)
         return empty, empty
     bit_positions = torch.arange(group_size, device=device, dtype=torch.long) * (bits - 4)
@@ -922,6 +947,19 @@ def _unpack_codes(
             geometry.n, geometry.groups_per_row, spec.group_size
         )
         return scales, codes
+    if spec.bits == 2:
+        # Ternary: stored codes are UNSIGNED 0..3, logical value is (code - 1)
+        # in {-1, 0, +1} (+2 reserved). Return SIGNED logical codes so the
+        # generic scales*code path and _dequant2 agree exactly.
+        packed = planes.base.reshape(groups, geometry.base_bytes_per_group).to(torch.int16)
+        u = torch.empty((groups, spec.group_size), dtype=torch.int16, device=packed.device)
+        u[:, 0::4] = packed & 0x03
+        u[:, 1::4] = (packed >> 2) & 0x03
+        u[:, 2::4] = (packed >> 4) & 0x03
+        u[:, 3::4] = (packed >> 6) & 0x03
+        return scales, (u - 1).to(torch.int8).reshape(
+            geometry.n, geometry.groups_per_row, spec.group_size
+        )
     packed = planes.base.reshape(groups, geometry.base_bytes_per_group).to(torch.int16)
     low = torch.empty((groups, spec.group_size), dtype=torch.int16, device=packed.device)
     low[:, 0::2] = packed & 0x0F
@@ -1014,7 +1052,22 @@ def _dequant8(base, _high, scale, _byte_indices, _shifts):
     return (codes * scales).to(torch.bfloat16)
 
 
+def _dequant2(base, _high, scale, _byte_indices, _shifts):
+    # Codes arrive SIGNED already (logical -1/0/+1/+2, see _unpack_codes).
+    scales = _scales(scale)
+    groups = scales.numel()
+    packed = base.reshape(groups, 32).to(torch.int16)
+    u = torch.empty((groups, 128), dtype=torch.int16, device=packed.device)
+    u[:, 0::4] = packed & 0x03
+    u[:, 1::4] = (packed >> 2) & 0x03
+    u[:, 2::4] = (packed >> 4) & 0x03
+    u[:, 3::4] = (packed >> 6) & 0x03
+    codes = (u - 1).float()
+    return (codes * scales).to(torch.bfloat16)
+
+
 _EAGER_DEQUANTIZERS = {
+    2: _dequant2,
     4: _dequant4,
     5: _dequant5,
     6: _dequant6,

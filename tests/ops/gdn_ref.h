@@ -32,7 +32,9 @@ struct Result {
 
 inline std::int64_t qk_head(std::int64_t value_head, std::int64_t qk_heads,
                             std::int64_t value_heads) {
-    return value_head / (value_heads / qk_heads);
+    (void)value_heads;
+    // Prism-true map: v-head h_v shares q/k head h_v % H_qk (see common.cuh).
+    return value_head % qk_heads;
 }
 
 inline Result evaluate(const Inputs& in, double scale, bool normalize_qk,
