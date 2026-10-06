@@ -1,5 +1,6 @@
 #include "targets/qwen3_5_9b/impl/load/bindings.h"
 
+#include "artifact/reader.h"
 #include "artifact/typed_binding.h"
 
 #include <algorithm>
@@ -24,15 +25,91 @@ using artifact::NumericFormat;
 
 bool is_full_layer(std::size_t layer) { return layer >= 3 && (layer - 3) % 4 == 0; }
 
+std::uint32_t read_u32_le(std::span<const std::byte> bytes, std::uint64_t offset,
+                          std::string_view label) {
+    if (offset > bytes.size() || bytes.size() - static_cast<std::size_t>(offset) < 4) {
+        throw artifact::ArtifactError(std::string(label) + ": FP32 word is outside payload");
+    }
+    const std::byte* value = bytes.data() + static_cast<std::size_t>(offset);
+    return std::to_integer<std::uint32_t>(value[0]) |
+           (std::to_integer<std::uint32_t>(value[1]) << 8U) |
+           (std::to_integer<std::uint32_t>(value[2]) << 16U) |
+           (std::to_integer<std::uint32_t>(value[3]) << 24U);
+}
+
+void require_positive_finite(std::uint32_t bits, std::string_view label) {
+    const float value = std::bit_cast<float>(bits);
+    if (!std::isfinite(value) || value <= 0.0F) {
+        throw artifact::ArtifactError(std::string(label) + ": divisor must be finite and positive");
+    }
+}
+
 WeightPlan bind_weight(artifact::Binder& binder, std::string_view name, NumericFormat format,
                        std::initializer_list<std::uint64_t> shape) {
+    if (format == NumericFormat::NVFP4) {
+        throw std::logic_error("NVFP4 weight requires a paired input divisor");
+    }
     return WeightPlan{.object = artifact::bind_device_tensor(binder, name, format, shape),
                       .format = format};
 }
 
+WeightPlan bind_nvfp4_weight(artifact::Binder& binder, std::string_view name, std::int32_t rows,
+                             std::int32_t columns, std::string_view input_divisor_name) {
+    const std::array<std::uint64_t, 2> shape = {static_cast<std::uint64_t>(rows),
+                                                static_cast<std::uint64_t>(columns)};
+    const artifact::ObjectHandle parent      = binder.require_tensor(
+        name, NumericFormat::NVFP4, artifact::StorageLayout::BlockScaleK16M128x4V1, shape);
+    binder.materialize_on_device(parent);
+
+    const artifact::ObjectHandle input_divisor =
+        artifact::bind_tensor(binder, input_divisor_name, NumericFormat::FP32, {},
+                              artifact::TensorPlacement::ValidateOnly);
+    const artifact::BlockScaleGeometry geometry =
+        artifact::block_scale_geometry(NumericFormat::NVFP4, shape);
+    const std::uint32_t weight_bits =
+        read_u32_le(binder.payload(parent).data, geometry.weight_divisor_offset, name);
+    const std::uint32_t input_bits =
+        read_u32_le(binder.payload(input_divisor).data, 0, input_divisor_name);
+    require_positive_finite(weight_bits, name);
+    require_positive_finite(input_bits, input_divisor_name);
+    return WeightPlan{.object                    = parent,
+                      .format                    = NumericFormat::NVFP4,
+                      .weight_scale_divisor_bits = weight_bits,
+                      .input_scale_divisor_bits  = input_bits};
+}
+
 Weight materialized_weight(const artifact::MaterializedArtifact& materialized,
                            const WeightPlan& plan, std::int32_t rows, std::int32_t columns) {
-    return artifact::materialized_weight(materialized, plan.object, plan.format, rows, columns);
+    if (plan.format != NumericFormat::NVFP4) {
+        return artifact::materialized_weight(materialized, plan.object, plan.format, rows, columns);
+    }
+
+    const std::array<std::uint64_t, 2> shape = {static_cast<std::uint64_t>(rows),
+                                                static_cast<std::uint64_t>(columns)};
+    const artifact::BlockScaleGeometry geometry =
+        artifact::block_scale_geometry(NumericFormat::NVFP4, shape);
+    const auto* bytes = static_cast<const std::byte*>(materialized.device_data(plan.object));
+
+    Weight out{};
+    out.payload              = bytes;
+    out.payload_bytes        = geometry.encoded_bytes;
+    out.qtype                = QType::NVFP4;
+    out.group_size           = 16;
+    out.ndim                 = 2;
+    out.qdata                = bytes;
+    out.scales               = bytes + geometry.scale_plane_offset;
+    out.n                    = rows;
+    out.k                    = columns;
+    out.group                = 16;
+    out.layout               = QuantLayout::BlockScaleK16M128x4;
+    out.scale_dtype          = DType::FP8_E4M3FN;
+    out.shape[0]             = rows;
+    out.shape[1]             = columns;
+    out.padded_shape[0]      = rows;
+    out.padded_shape[1]      = columns;
+    out.weight_scale_divisor = std::bit_cast<float>(plan.weight_scale_divisor_bits);
+    out.input_scale_divisor  = std::bit_cast<float>(plan.input_scale_divisor_bits);
+    return out;
 }
 
 Weight row_view(const Weight& block, std::int32_t row_begin, std::int32_t row_count) {
@@ -89,7 +166,7 @@ load_gdn_input_projection(const GdnPlan& plan, const artifact::MaterializedArtif
     };
 }
 
-void bind_text_layers(artifact::Binder& binder, BindingPlan& out) {
+void bind_text_layers(artifact::Binder& binder, BindingPlan& out, WeightsProfile weights_profile) {
     for (std::size_t layer = 0; layer < kTextLayers; ++layer) {
         TextLayerPlan& target    = out.text_layers[layer];
         const std::string prefix = "text/layers/" + std::to_string(layer) + "/";
@@ -133,10 +210,19 @@ void bind_text_layers(artifact::Binder& binder, BindingPlan& out) {
         }
         target.post_attention_norm = artifact::bind_device_tensor(
             binder, prefix + "post_attention_norm", NumericFormat::BF16, {4096});
-        target.mlp.gate_up =
-            bind_weight(binder, prefix + "mlp/gate_up", NumericFormat::Q4G64_F16S, {24576, 4096});
-        target.mlp.down =
-            bind_weight(binder, prefix + "mlp/down", NumericFormat::Q5G64_F16S, {4096, 12288});
+        if (weights_profile == WeightsProfile::Nvfp4Mlp) {
+            target.mlp.gate_up = bind_nvfp4_weight(
+                binder, prefix + "mlp/gate_up", 24576, 4096,
+                prefix + "mlp/gate_up_projection/input_scale_divisor");
+            target.mlp.down = bind_nvfp4_weight(
+                binder, prefix + "mlp/down", 4096, 12288,
+                prefix + "mlp/down_projection/input_scale_divisor");
+        } else {
+            target.mlp.gate_up = bind_weight(binder, prefix + "mlp/gate_up",
+                                             NumericFormat::Q4G64_F16S, {24576, 4096});
+            target.mlp.down    = bind_weight(binder, prefix + "mlp/down", NumericFormat::Q5G64_F16S,
+                                             {4096, 12288});
+        }
     }
 }
 
@@ -255,8 +341,9 @@ RuntimeModelView build_runtime(BindingPlan const& plan,
 
 ArtifactLoadPlan bind_artifact(artifact::Binder& binder, WeightsProfile weights_profile,
                                qwen3_6::StartupFeatures features) {
-    if (weights_profile != WeightsProfile::GroupwiseInt) {
-        throw std::invalid_argument("qwen3_5_9b: only GroupwiseInt is supported");
+    if (weights_profile != WeightsProfile::GroupwiseInt &&
+        weights_profile != WeightsProfile::Nvfp4Mlp) {
+        throw std::invalid_argument("qwen3_5_9b: invalid weights profile");
     }
 
     BindingPlan out;
@@ -270,7 +357,7 @@ ArtifactLoadPlan bind_artifact(artifact::Binder& binder, WeightsProfile weights_
                                       NumericFormat::Q6G64_F16S, {248320, 4096});
 
     // Text layers
-    bind_text_layers(binder, out);
+    bind_text_layers(binder, out, weights_profile);
 
     // Final norm
     out.final_norm = artifact::bind_device_tensor(binder, "text/final_norm",

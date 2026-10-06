@@ -33,7 +33,9 @@ Nvfp4LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows
     case Nvfp4Problem::GdnInput:
         return Nvfp4LinearRoute::W4A4;
     case Nvfp4Problem::MlpGateUp:
+    case Nvfp4Problem::MlpGateUp4096:
         return tokens >= 5 ? Nvfp4LinearRoute::W4A4 : Nvfp4LinearRoute::A16;
+    case Nvfp4Problem::MlpDown12288:
     case Nvfp4Problem::Residual6144:
     case Nvfp4Problem::Residual17408:
         return tokens >= 8 ? Nvfp4LinearRoute::W4A4 : Nvfp4LinearRoute::A16;
@@ -42,7 +44,8 @@ Nvfp4LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-    constexpr std::int32_t kChunk = kNvfp4LastSmallT;
+    const std::int32_t kChunk = is_ornith_nvfp4_mlp(weight.n, weight.k) ? kNvfp4OrnithLastSmallT
+                                                                       : kNvfp4LastSmallT;
     for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += kChunk) {
         const std::int32_t active = std::min(kChunk, x.ne[1] - token_begin);
         auto* input               = static_cast<std::uint8_t*>(x.data) +

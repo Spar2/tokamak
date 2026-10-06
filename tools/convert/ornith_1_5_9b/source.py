@@ -83,8 +83,12 @@ class OrnithShardReader(ShardReader):
         self.weight_map = source.weight_map
         self._reset_handle()
 
+    def get_raw(self, name: str) -> torch.Tensor:
+        """Return the stored safetensors payload without NVFP4/FP8 decode."""
+        return super().get(name)
+
     def get(self, name: str) -> torch.Tensor:
-        tensor = super().get(name)
+        tensor = self.get_raw(name)
         if not name.endswith(".weight"):
             return tensor
         if tensor.dtype == torch.uint8:
@@ -105,3 +109,4 @@ class OrnithShardReader(ShardReader):
 
 
 __all__ = ["OrnithShardReader"]
+

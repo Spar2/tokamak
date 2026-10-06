@@ -226,18 +226,21 @@ void validate_profile(const Profile& profile) {
                             profile.input_rows == 5120 && profile.output_rows == 17408;
     const bool nvfp4 = profile.qtype == QType::NVFP4 && profile.gate_up_rows == 34816 &&
                        profile.input_rows == 5120 && profile.output_rows == 17408;
+    const bool nvfp4_ornith = profile.qtype == QType::NVFP4 && profile.gate_up_rows == 24576 &&
+                              profile.input_rows == 4096 && profile.output_rows == 12288;
     const bool fp8 = profile.qtype == QType::FP8_E4M3FN_ROW_BF16S &&
                      profile.gate_up_rows == 34816 && profile.input_rows == 5120 &&
                      profile.output_rows == 17408;
-    if ((!q4 && !w8_companion && !w8_dflash2 && !nvfp4 && !fp8) ||
+    if ((!q4 && !w8_companion && !w8_dflash2 && !nvfp4 && !nvfp4_ornith && !fp8) ||
         profile.gate_up_rows != 2 * profile.output_rows) {
         throw std::invalid_argument("linear_swiglu test: profile is not registered");
     }
     if ((nvfp4 && profile.activation_compute != ActivationCompute::A16 &&
          profile.activation_compute != ActivationCompute::A4) ||
+        (nvfp4_ornith && profile.activation_compute != ActivationCompute::A16) ||
         (fp8 && profile.activation_compute != ActivationCompute::A16 &&
          profile.activation_compute != ActivationCompute::A8) ||
-        (!nvfp4 && !fp8 && profile.activation_compute != ActivationCompute::A16)) {
+        (!nvfp4 && !nvfp4_ornith && !fp8 && profile.activation_compute != ActivationCompute::A16)) {
         throw std::invalid_argument("linear_swiglu test: invalid activation-compute profile");
     }
 }

@@ -122,6 +122,12 @@ void launch_nvfp4_w4a4(const Tensor& x, const Weight& weight, Tensor& out,
     case Nvfp4Problem::MlpGateUp:
         launch_problem<Nvfp4MlpGateUpGeometry>(weight, out, workspace, tokens, stream);
         return;
+    case Nvfp4Problem::MlpGateUp4096:
+        throw std::invalid_argument(
+            "nvfp4 W4A4: 4096-K activation path not implemented (W4A16 pilot only)");
+    case Nvfp4Problem::MlpDown12288:
+        throw std::invalid_argument(
+            "nvfp4 W4A4: 12288-K activation path not implemented (W4A16 pilot only)");
     case Nvfp4Problem::Residual6144:
         launch_problem<Nvfp4Residual6144Geometry>(weight, out, workspace, tokens, stream);
         return;

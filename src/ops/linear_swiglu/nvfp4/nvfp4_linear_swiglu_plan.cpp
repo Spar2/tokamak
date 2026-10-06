@@ -1,6 +1,7 @@
 #include "ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_plan.h"
 
 #include "core/layout.h"
+#include "ninfer/ops/linear.h"
 #include "ninfer/ops/silu_mul.h"
 #include "ops/linear/nvfp4/nvfp4_config.h"
 #include "ops/linear/nvfp4/nvfp4_w4a4_plan.h"
@@ -8,6 +9,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 
 namespace ninfer::ops::detail {
@@ -108,6 +110,45 @@ std::size_t nvfp4_linear_swiglu_workspace_capacity_bytes(LinearPolicy policy,
         maximum = std::max(maximum, baseline_workspace_bytes(last_baseline));
     }
     return maximum;
+}
+
+std::size_t nvfp4_ornith_mlp_linear_swiglu_workspace_capacity_bytes(std::int32_t min_tokens,
+                                                                    std::int32_t max_tokens) {
+    if (min_tokens <= 0 || max_tokens < min_tokens) {
+        throw std::invalid_argument("nvfp4 ornith linear_swiglu workspace: invalid token interval");
+    }
+    (void)max_tokens;
+    return 0;
+}
+
+void nvfp4_ornith_mlp_linear_swiglu_dispatch(const Tensor& x, const Weight& weight, Tensor& out,
+                                             WorkspaceArena& workspace, cudaStream_t stream) {
+    (void)workspace;
+    const std::int32_t tokens = x.ne[1];
+    if (tokens == 1) {
+        nvfp4_linear_swiglu_decode_launch(x, weight, out, stream);
+        return;
+    }
+    if (tokens <= kNvfp4OrnithLastSmallT) {
+        nvfp4_linear_swiglu_small_t_launch(x, weight, out, stream);
+        return;
+    }
+    constexpr std::int32_t kIntermediate = Nvfp4MlpGateUp4096Geometry::kOutputRows / 2;
+    for (std::int32_t token_begin = 0; token_begin < tokens;
+         token_begin += kNvfp4OrnithLastSmallT) {
+        const std::int32_t active = std::min(kNvfp4OrnithLastSmallT, tokens - token_begin);
+        auto* input               = static_cast<std::uint8_t*>(x.data) +
+                      static_cast<std::int64_t>(token_begin) * weight.k * sizeof(std::uint16_t);
+        auto* output = static_cast<std::uint8_t*>(out.data) +
+                       static_cast<std::int64_t>(token_begin) * kIntermediate * sizeof(std::uint16_t);
+        Tensor input_chunk(input, DType::BF16, {weight.k, active});
+        Tensor output_chunk(output, DType::BF16, {kIntermediate, active});
+        if (active == 1) {
+            nvfp4_linear_swiglu_decode_launch(input_chunk, weight, output_chunk, stream);
+        } else {
+            nvfp4_linear_swiglu_small_t_launch(input_chunk, weight, output_chunk, stream);
+        }
+    }
 }
 
 void nvfp4_linear_swiglu_dispatch(const Tensor& x, const Weight& weight, Tensor& out,

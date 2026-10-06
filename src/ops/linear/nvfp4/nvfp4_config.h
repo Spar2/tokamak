@@ -108,10 +108,15 @@ struct Nvfp4SmallTSchedule {
 using Nvfp4AttnInputGeometry     = Nvfp4GemvGeometry<14336, 5120>;
 using Nvfp4GdnInputGeometry      = Nvfp4GemvGeometry<16384, 5120>;
 using Nvfp4MlpGateUpGeometry     = Nvfp4GemvGeometry<34816, 5120>;
+// Ornith-1.5-9B MLP gate_up pilot (W4A16 only): fused gate+up, K=4096.
+using Nvfp4MlpGateUp4096Geometry = Nvfp4GemvGeometry<24576, 4096>;
+// Ornith-1.5-9B MLP down pilot (W4A16 only): single down_proj, K=12288.
+using Nvfp4MlpDown12288Geometry = Nvfp4GemvGeometry<4096, 12288>;
 using Nvfp4Residual6144Geometry  = Nvfp4GemvGeometry<5120, 6144>;
 using Nvfp4Residual17408Geometry = Nvfp4GemvGeometry<5120, 17408>;
 
 using Nvfp4Activation5120Geometry  = Nvfp4ActivationGeometry<5120>;
+using Nvfp4Activation4096Geometry  = Nvfp4ActivationGeometry<4096>;
 using Nvfp4Activation6144Geometry  = Nvfp4ActivationGeometry<6144>;
 using Nvfp4Activation17408Geometry = Nvfp4ActivationGeometry<17408>;
 
@@ -119,6 +124,8 @@ enum class Nvfp4Problem : std::uint8_t {
     AttnInput,
     GdnInput,
     MlpGateUp,
+    MlpGateUp4096,
+    MlpDown12288,
     Residual6144,
     Residual17408,
 };
@@ -130,6 +137,10 @@ inline constexpr bool is_nvfp4_linear_problem(std::int32_t output_rows, std::int
             input_rows == Nvfp4GdnInputGeometry::kInputRows) ||
            (output_rows == Nvfp4MlpGateUpGeometry::kOutputRows &&
             input_rows == Nvfp4MlpGateUpGeometry::kInputRows) ||
+           (output_rows == Nvfp4MlpGateUp4096Geometry::kOutputRows &&
+            input_rows == Nvfp4MlpGateUp4096Geometry::kInputRows) ||
+           (output_rows == Nvfp4MlpDown12288Geometry::kOutputRows &&
+            input_rows == Nvfp4MlpDown12288Geometry::kInputRows) ||
            (output_rows == Nvfp4Residual6144Geometry::kOutputRows &&
             input_rows == Nvfp4Residual6144Geometry::kInputRows) ||
            (output_rows == Nvfp4Residual17408Geometry::kOutputRows &&
@@ -148,6 +159,14 @@ inline Nvfp4Problem resolve_nvfp4_problem(std::int32_t output_rows, std::int32_t
     if (output_rows == Nvfp4MlpGateUpGeometry::kOutputRows &&
         input_rows == Nvfp4MlpGateUpGeometry::kInputRows) {
         return Nvfp4Problem::MlpGateUp;
+    }
+    if (output_rows == Nvfp4MlpGateUp4096Geometry::kOutputRows &&
+        input_rows == Nvfp4MlpGateUp4096Geometry::kInputRows) {
+        return Nvfp4Problem::MlpGateUp4096;
+    }
+    if (output_rows == Nvfp4MlpDown12288Geometry::kOutputRows &&
+        input_rows == Nvfp4MlpDown12288Geometry::kInputRows) {
+        return Nvfp4Problem::MlpDown12288;
     }
     if (output_rows == Nvfp4Residual6144Geometry::kOutputRows &&
         input_rows == Nvfp4Residual6144Geometry::kInputRows) {
@@ -169,6 +188,15 @@ struct Nvfp4LinearDecodeProductionSchedule {
 
 inline constexpr std::int32_t kNvfp4FirstSmallT = 2;
 inline constexpr std::int32_t kNvfp4LastSmallT  = 32;
+// Ornith MLP A16 is validated through T=16. T=32 on 24576x4096 failed numeric checks.
+inline constexpr std::int32_t kNvfp4OrnithLastSmallT = 16;
+
+inline constexpr bool is_ornith_nvfp4_mlp(std::int32_t output_rows, std::int32_t input_rows) {
+    return (output_rows == Nvfp4MlpGateUp4096Geometry::kOutputRows &&
+            input_rows == Nvfp4MlpGateUp4096Geometry::kInputRows) ||
+           (output_rows == Nvfp4MlpDown12288Geometry::kOutputRows &&
+            input_rows == Nvfp4MlpDown12288Geometry::kInputRows);
+}
 
 // RTX 5090 cold-cache winners for contiguous Linear output. T=2..4 amortizes activation loads
 // through shared staging; T=5..32 keeps one packed activation tile per warp. The warp-count changes
