@@ -85,8 +85,9 @@ design note in the `ornith-9b-nvfp4` history).
 
 ### Ours vs orig at 64k context, matched runs (C1, greedy)
 
-Same 60,738-token prompt, 64k context, int8 KV, prefill chunk 4096, 256 output tokens —
-only the weights and the MTP switch differ:
+Same 60,738-token prompt, 64k context, int8 KV, prefill chunk 4096, 256 output tokens
+for the three NInfer legs (llama leg differs: bench-generated prompt, fp16 KV,
+default sampling — see notes under the tables):
 
 ![Ornith 64k prefill](docs/tokamak/charts/ornith-64k-prefill.svg)
 ![Ornith 64k decode](docs/tokamak/charts/ornith-64k-decode.svg)

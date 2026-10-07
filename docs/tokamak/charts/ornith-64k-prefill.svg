@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="430" viewBox="0 0 720 430" role="img" aria-label="Ornith 64k-context prefill, tok/s (higher is better)">
 <rect x="0.5" y="0.5" width="719" height="429" rx="6" fill="#ffffff" stroke="#d8dee4"/>
 <text x="24" y="30" font-size="15" font-weight="600" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Ornith 64k-context prefill, tok/s (higher is better)</text>
-<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">60,738-token prompt (llama: bench prompt), 64k ctx, greedy; medians</text>
+<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">60,738-token prompt (llama: bench prompt, default sampling), 64k ctx, greedy; medians</text>
 <rect x="220" y="197" width="64" height="139" rx="3" fill="#8c959f"/>
 <text x="252" y="191" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">2515</text>
 <rect x="292" y="208" width="64" height="128" rx="3" fill="#57606a"/>
