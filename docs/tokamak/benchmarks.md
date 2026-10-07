@@ -124,7 +124,8 @@ the in-repo research report `bonsai2-ninfer-study/final/FINAL-REPORT-RESEARCH.md
 ## Diagnosed gaps (not displayed as wins)
 
 **Bonsai decode 75 ms/step — why not faster yet.** Component microbenchmarks (T=1 GEMV:
-qkv 0.067, gate 0.044, so 0.063, fg 0.068 ms) account for ~20 ms of the 64-layer step;
+qkv 0.0658, gate 0.0406, so 0.0465, fg 0.0649, fd 0.1168, head 2.2536 ms) account for
+~22 ms of the 64-layer step;
 the rest is GDN recurrent kernels, attention, norms, and — structurally — hundreds of
 eager kernel launches per step with no CUDA graphs on a WDDM host (the known ~ms-scale
 dispatch stall regime). ncu profiling is blocked in our containers (no perf-counter
