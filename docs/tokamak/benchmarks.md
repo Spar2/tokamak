@@ -92,14 +92,14 @@ prefill chunk 4096, greedy, 256 output tokens, server `throughput`/`req done` li
 
 | Setup @64k | llama Q4_K_M | groupwise-int (orig) | NVFP4 (this fork) | FP8-hybrid (this fork) |
 |---|---|---:|---:|---:|
-| Prefill, MTP off | 2515 tok/s | 2320 tok/s (TTFT 26.2 s) | **3880 tok/s (TTFT 15.7 s)** | 627 tok/s |
+| Prefill, MTP off | 2515 tok/s | 2320 tok/s (TTFT 26.2 s) | **3880 tok/s (TTFT 15.7 s)** | under optimization (see diagnosis) |
 | Decode, MTP off | 78.3 tok/s | 64.4 tok/s | **68.6 tok/s** | 66.6 tok/s |
 | Decode, MTP3 | n/a | 98.0 tok/s (accept 47.0%) | **112.2 tok/s (accept 49.7%)** | 109.9 tok/s (accept 62.4%) |
 
 llama leg: official `ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M` (5.78 GB) via local CUDA
 `llama-bench` (build df03399b8), `-p 60738 -n 256 -ngl 99`, fp16 KV, default sampling —
-same token counts, bench-generated prompt text. FP8 prefill trails (hybrid GDN path
-cost at 60k tokens); FP8 decode at parity with the highest MTP acceptance.
+same token counts, bench-generated prompt text. FP8 decode at parity with the highest
+MTP acceptance; FP8 prefill diagnosis below.
 
 Wider context (different corpora/harnesses):
 
@@ -107,13 +107,31 @@ Wider context (different corpora/harnesses):
 |---|---|---:|
 | Ornith C1 per-request decode, MTP | 108.2 (upstream, 25.6k prompt) | 165 (camp median of 4 cold singles, 1953 prompt) |
 | Ornith C8 aggregate decode, MTP | 309.9 committed (upstream) | 321 (dynfull C8 wave) |
-| Bonsai decode | 38–40 (llama.cpp/Prism PQ2 serve, 8–32k ctx, greedy) | 13.3/lane (bq2 chain_gen, no MTP/graphs, short ctx) |
-| Bonsai prefill | 700–800 @8k prompt (llama.cpp/Prism PQ2) | 32/66/61/150 @T8/32/33/64 (P1-SYNC, short ctx) |
+| Bonsai prefill | 700–800 @8k prompt (llama.cpp/Prism PQ2, context) | 32/66/61/150 tok/s @T8/32/33/64 (P1-SYNC, short ctx) |
 
-Bonsai full-model runs use short prompts (T≤64, the validated envelope); the 64k-context
+Bonsai decode serving (MTP/graphs) is roadmap, not claim — diagnosis below. Bonsai
+full-model runs use short prompts (T≤64, the validated envelope); the 64k-context
 llama rows (PQ2 8k healthy, 32k healthy, 64k THRASH 1–8 tok/s vs PTQ 44–46) are cited from
 the in-repo research report `bonsai2-ninfer-study/final/FINAL-REPORT-RESEARCH.md`
 (§XX–XXIII, Prism fork win-cuda-13.3, identity-verified).
+
+## Diagnosed gaps (not displayed as wins)
+
+**Bonsai decode 75 ms/step — why not faster yet.** Component microbenchmarks (T=1 GEMV:
+qkv 0.067, gate 0.044, so 0.063, fg 0.068 ms) account for ~20 ms of the 64-layer step;
+the rest is GDN recurrent kernels, attention, norms, and — structurally — hundreds of
+eager kernel launches per step with no CUDA graphs on a WDDM host (the known ~ms-scale
+dispatch stall regime). ncu profiling is blocked in our containers (no perf-counter
+permission), so this stays an estimate. Fix = M7-decode project (graph-wrapped decode);
+until then the standalone ms/step number stands without an orig bar.
+
+**FP8 prefill ~1.6 ms/token flat — why.** Isolated 7 Oct: 692 tok/s @2.3k tokens ≈
+627 tok/s @60k tokens (length-independent!); forcing the proven groupwise split route
+(threshold experiment, reverted) gives 700 tok/s — identical. Op benches show the FP8
+projection/snapshot kernels winning, so the cost sits in the hybrid per-call path
+(composed materialization + host-side launch storm: server logs show host >117%).
+Fix = batching the hybrid token loop + fused-conv kernels for the 4096 geometry;
+until then FP8 sells on decode parity and the best MTP acceptance (62.4%).
 
 ## Validated prefill range (bisected 7 Oct)
 

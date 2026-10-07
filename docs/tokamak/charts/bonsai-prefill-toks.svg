@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" role="img" aria-label="Bonsai prefill tok/s vs prompt length (log-x)">
 <rect x="0.5" y="0.5" width="719" height="379" rx="6" fill="#ffffff" stroke="#d8dee4"/>
 <text x="24" y="30" font-size="15" font-weight="600" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Bonsai prefill throughput vs prompt length (log-x)</text>
-<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">P1-SYNC T=8..64 measured here; llama point at 8k prompt is context, not same-T</text>
+<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">P1-SYNC T=8..64 measured here; validated full-model range</text>
 <line x1="64" y1="336" x2="696" y2="336" stroke="#d8dee4"/>
 <text x="56" y="340" font-size="11" text-anchor="end" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">0</text>
 <line x1="64" y1="273" x2="696" y2="273" stroke="#d8dee4"/>
@@ -27,10 +27,6 @@
 <text x="208" y="335" font-size="11" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">61</text>
 <circle cx="254.3" cy="288.8" r="4" fill="#0969da"/>
 <text x="254.3" y="278.8" font-size="11" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">150</text>
-<line x1="606" y1="100" x2="696" y2="100" stroke="#8c959f" stroke-width="4" stroke-linecap="round" stroke-dasharray="8 5"/>
-<text x="708" y="88" font-size="11" text-anchor="end" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">llama.cpp/Prism PQ2 @8k prompt: 700-800 tok/s</text>
 <rect x="24" y="360" width="12" height="12" rx="2" fill="#0969da"/>
-<text x="41" y="370" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">P1-SYNC (this fork)</text>
-<rect x="219" y="360" width="12" height="12" rx="2" fill="#8c959f"/>
-<text x="236" y="370" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">llama.cpp/Prism orig (context)</text>
+<text x="41" y="370" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">P1-SYNC (this fork), T=8..64</text>
 </svg>

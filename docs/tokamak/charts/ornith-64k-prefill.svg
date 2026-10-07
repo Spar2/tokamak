@@ -2,14 +2,12 @@
 <rect x="0.5" y="0.5" width="719" height="429" rx="6" fill="#ffffff" stroke="#d8dee4"/>
 <text x="24" y="30" font-size="15" font-weight="600" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Ornith 64k-context prefill, tok/s (higher is better)</text>
 <text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">60,738-token prompt (llama: bench prompt, default sampling), 64k ctx, greedy; medians</text>
-<rect x="220" y="197" width="64" height="139" rx="3" fill="#8c959f"/>
-<text x="252" y="191" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">2515</text>
-<rect x="292" y="208" width="64" height="128" rx="3" fill="#57606a"/>
-<text x="324" y="202" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">2320</text>
-<rect x="364" y="122" width="64" height="214" rx="3" fill="#0969da"/>
-<text x="396" y="116" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">3880</text>
-<rect x="436" y="301" width="64" height="35" rx="3" fill="#1a7f37"/>
-<text x="468" y="295" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">627</text>
+<rect x="256" y="197" width="64" height="139" rx="3" fill="#8c959f"/>
+<text x="288" y="191" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">2515</text>
+<rect x="328" y="208" width="64" height="128" rx="3" fill="#57606a"/>
+<text x="360" y="202" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">2320</text>
+<rect x="400" y="122" width="64" height="214" rx="3" fill="#0969da"/>
+<text x="432" y="116" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">3880</text>
 <text x="360" y="356" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">prefill</text>
 <rect x="24" y="408" width="12" height="12" rx="2" fill="#8c959f"/>
 <text x="41" y="418" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">llama Q4_K_M</text>
@@ -17,6 +15,4 @@
 <text x="180" y="418" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">groupwise</text>
 <rect x="278" y="408" width="12" height="12" rx="2" fill="#0969da"/>
 <text x="295" y="418" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">NVFP4 (ours)</text>
-<rect x="417" y="408" width="12" height="12" rx="2" fill="#1a7f37"/>
-<text x="434" y="418" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">FP8-hybrid (ours)</text>
 </svg>

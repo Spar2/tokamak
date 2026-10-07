@@ -94,7 +94,7 @@ default sampling — see notes under the tables):
 
 | Setup @64k | llama.cpp Q4_K_M | groupwise-int (orig) | NVFP4 (ours) | FP8-hybrid (ours) |
 |---|---|---:|---:|---:|
-| Prefill, MTP off | 2515 tok/s | 2320 tok/s | **3880 tok/s** | 627 tok/s |
+| Prefill, MTP off | 2515 tok/s | 2320 tok/s | **3880 tok/s** | under optimization (see notes) |
 | Decode, MTP off | 78.3 tok/s | 64.4 tok/s | **68.6 tok/s** | 66.6 tok/s |
 | Decode, MTP3 | n/a (no speculation) | 98.0 tok/s (acc 47%) | **112.2 tok/s (acc 50%)** | 109.9 tok/s (acc 62%) |
 
@@ -106,8 +106,11 @@ Wider context (different corpora/harnesses — direction, not races):
 | Setup | Orig | This fork |
 |---|---|---:|
 | Ornith C8 aggregate decode, MTP | 309.9 tok/s committed (upstream, 25–27k prompts) | 321 tok/s (dynfull wave, 1953-prompt corpus) |
-| Bonsai decode | 38–40 tok/s (llama.cpp/Prism PQ2 serve, 8–32k ctx) | 13.3 tok/s/lane (bq2 correctness harness, no MTP/graphs) |
-| Bonsai prefill | 700–800 tok/s @8k prompt (llama.cpp/Prism PQ2) | 32/66/61/150 tok/s @T8/32/33/64 (P1-SYNC) |
+| Bonsai prefill | 700–800 tok/s @8k prompt (llama.cpp/Prism PQ2, context) | 32/66/61/150 tok/s @T8/32/33/64 (P1-SYNC) |
+
+Bonsai decode serving (MTP/graphs) is roadmap, not claim — see diagnosis in
+[benchmarks](docs/tokamak/benchmarks.md#bonsai-decode-75-msstep-why-not-faster-yet).
+FP8 prefill likewise (per-token serial cost isolated, fused batching in progress).
 
 Bonsai prefill throughput scales with prompt length; the llama point sits at a different
 length and is context, not a same-T race:
