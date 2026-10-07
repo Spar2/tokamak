@@ -72,10 +72,31 @@ Median **75.07 ms/token** (min 70.07, p90 80.96). Generation is bit-exact across
 
 ![Ornith crossover](docs/tokamak/charts/ornith-crossover.svg)
 
+At decode widths (T=1..8, the shapes that matter for single-stream generation),
+NVFP4 beats the groupwise baseline on every width — the reason this fork exists:
+
+![Ornith gate_up at decode widths](docs/tokamak/charts/ornith-decode-gateup.svg)
+![Ornith down at decode widths](docs/tokamak/charts/ornith-decode-down.svg)
+
 Dynamic W4A4 (T≥128, default ON, `NINFER_ORNITH_DYNAMIC_W4A4=0` falls back to pure W4A16):
 perplexity GW 6.220 → W4A16 6.327 → dynamic 6.367. The draft head stays Q4 on purpose —
 the heads work measured Q4→NVFP4 as parity-or-loss (620 vs 647 µs at 131072×4096;
 design note in the `ornith-9b-nvfp4` history).
+
+### Ours vs orig, in tok/s (end to end)
+
+![End-to-end tok/s](docs/tokamak/charts/end-to-end-toks.svg)
+
+| Setup | Orig | This fork | Honest notes |
+|---|---|---:|---|
+| Ornith C1 per-request decode, MTP | 108.2 tok/s (upstream, 25.6k prompt) | 165 tok/s (camp median, 1953 prompt) | different corpora — op-level widths above are the apples-to-apples proof |
+| Ornith C8 aggregate decode, MTP | 309.9 tok/s (upstream) | 321 tok/s (dynfull wave) | same MTP regime, different corpora |
+| Bonsai decode | 38–40 tok/s (llama.cpp/Prism PQ2 serve) | 13.3 tok/s/lane (correctness harness, no MTP/graphs) | different harnesses — decode serving is on our roadmap, not our claim |
+
+Bonsai prefill throughput scales with prompt length; the llama point sits at a different
+length and is context, not a same-T race:
+
+![Bonsai prefill tok/s vs length](docs/tokamak/charts/bonsai-prefill-toks.svg)
 
 <details>
 <summary>Glossary for readers new to NInfer</summary>
@@ -125,8 +146,8 @@ Per-track details live in each showcase branch.
 
 - Prefill soak across arbitrary T (wall + device double timing) and the default-ON decision
   for `NINFER_T2_PREFILL_P1` (currently OFF — legacy behavior is the default);
-- T=128 full-model coverage (blocked by an upstream attention envelope, fails identically
-  without our changes);
+- T=65+ full-model coverage (bisected 7 Oct: T=64 green, T=65 fails identically with
+  the gate OFF — a pre-existing upstream attention envelope, not our kernels);
 - Growing this map: each new kernel lands as a validated showcase branch with numbers.
 
 ## Credits & license

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" viewBox="0 0 720 400" role="img" aria-label="Ornith down 4096x12288 at decode widths, us (lower is better)">
+<rect x="0.5" y="0.5" width="719" height="399" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+<text x="24" y="30" font-size="15" font-weight="600" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Ornith down 4096x12288 at decode widths, us (lower is better)</text>
+<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">T=1..8 token batch; Q5-prod vs NVFP4 W4A16, medians, warmup 20 x repeat 50</text>
+<rect x="48" y="251" width="56" height="85" rx="3" fill="#8c959f"/>
+<text x="76" y="245" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">110.1</text>
+<rect x="112" y="279" width="56" height="57" rx="3" fill="#1a7f37"/>
+<text x="140" y="273" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">73.1</text>
+<text x="108" y="356" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">T=1</text>
+<rect x="82" y="76" width="52" height="20" rx="10" fill="#1a7f37"/>
+<text x="108" y="91" font-size="12" font-weight="700" text-anchor="middle" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">-34%</text>
+<rect x="216" y="245" width="56" height="91" rx="3" fill="#8c959f"/>
+<text x="244" y="239" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">118.2</text>
+<rect x="280" y="273" width="56" height="63" rx="3" fill="#1a7f37"/>
+<text x="308" y="267" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">81.8</text>
+<text x="276" y="356" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">T=2</text>
+<rect x="250" y="76" width="52" height="20" rx="10" fill="#1a7f37"/>
+<text x="276" y="91" font-size="12" font-weight="700" text-anchor="middle" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">-31%</text>
+<rect x="384" y="235" width="56" height="101" rx="3" fill="#8c959f"/>
+<text x="412" y="229" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">130.6</text>
+<rect x="448" y="267" width="56" height="69" rx="3" fill="#1a7f37"/>
+<text x="476" y="261" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">89.5</text>
+<text x="444" y="356" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">T=4</text>
+<rect x="418" y="76" width="52" height="20" rx="10" fill="#1a7f37"/>
+<text x="444" y="91" font-size="12" font-weight="700" text-anchor="middle" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">-31%</text>
+<rect x="552" y="121" width="56" height="215" rx="3" fill="#8c959f"/>
+<text x="580" y="115" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">277.5</text>
+<rect x="616" y="229" width="56" height="107" rx="3" fill="#1a7f37"/>
+<text x="644" y="223" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">138.6</text>
+<text x="612" y="356" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">T=8</text>
+<rect x="586" y="76" width="52" height="20" rx="10" fill="#1a7f37"/>
+<text x="612" y="91" font-size="12" font-weight="700" text-anchor="middle" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">-50%</text>
+<rect x="24" y="378" width="12" height="12" rx="2" fill="#8c959f"/>
+<text x="41" y="388" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Q5-prod (orig)</text>
+<rect x="179" y="378" width="12" height="12" rx="2" fill="#1a7f37"/>
+<text x="196" y="388" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">NVFP4 W4A16 (this fork)</text>
+</svg>

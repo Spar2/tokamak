@@ -58,14 +58,52 @@ Generation bit-exact over 32 reset steps; near-ties excused: 0.
 
 MMA column: `notes/large-t-w4a16-mma.md` qualification runs (same rig, warmup 5 /
 repeat 20 series extended). `down` 4096×12288 from the same note: T=32 Q5 333 vs
-MMA 360, T=64 Q5 340 vs MMA **292**, T=128 Q5 337 vs MMA 422.
-
-`down` 4096×12288 from the same note: T=32 Q5 333 vs MMA 360 (still trailing),
-T=64 Q5 340 vs MMA **292**, T=128 Q5 337 vs MMA 422.
+MMA 360 (still trailing), T=64 Q5 340 vs MMA **292**, T=128 Q5 337 vs MMA 422.
 Raw tiled series: `results/crossover_gate_up.csv`, `results/crossover_down.csv` on the
-`experiment/ornith-dynamic-w4a4` branch (warmup 5, repeat 20); MMA column from the
-qualification note `notes/large-t-w4a16-mma.md` (same campaign). An independent rerun
-on 7 Oct (warmup 20, repeat 50) confirmed gate_up T=32 at 446 (≈1.5%).
+`experiment/ornith-dynamic-w4a4` branch. An independent rerun on 7 Oct
+(warmup 20, repeat 50) confirmed gate_up T=32 at 446 (≈1.5%).
+
+## Decode widths (matched method, warmup 20 × repeat 50, medians, µs)
+
+gate_up 24576×4096 — Q4-prod vs NVFP4 W4A16:
+
+| T | Q4-prod | NVFP4 | Faster |
+|---|---:|---:|---:|
+| 1 | 161.7 | 135.1 | 16% |
+| 2 | 177.6 | 141.2 | 20% |
+| 4 | 206.6 | 163.2 | 21% |
+| 8 | 325.1 | 250.7 | 23% |
+| 16 | 616.4 | 421.9 | 32% |
+
+down 4096×12288 — Q5-prod vs NVFP4 W4A16:
+
+| T | Q5-prod | NVFP4 | Faster |
+|---|---:|---:|---:|
+| 1 | 110.1 | 73.1 | 34% |
+| 2 | 118.2 | 81.8 | 31% |
+| 4 | 130.6 | 89.5 | 31% |
+| 8 | 277.5 | 138.6 | 50% |
+| 16 | 511.9 | 219.0 | 57% |
+
+## End to end vs orig (tok/s, with corpora)
+
+| Setup | Orig | This fork |
+|---|---|---:|
+| Ornith C1 per-request decode, MTP | 108.2 (upstream, 25.6k prompt) | 165 (camp median of 4 cold singles, 1953 prompt) |
+| Ornith C8 aggregate decode, MTP | 309.9 committed (upstream) | 321 (dynfull wave, batch 8) |
+| Bonsai decode | 38–40 (llama.cpp/Prism PQ2 serve, 8–32k ctx) | 13.3/lane (bq2 correctness harness, no MTP/graphs) |
+| Bonsai prefill | 700–800 @8k prompt (llama.cpp/Prism PQ2) | 32/66/61/150 @T8/32/33/64 (P1-SYNC) |
+
+C1/C8 corpora differ (per-request decode slows with context length), so the op-level
+widths above are the apples-to-apples proof; the waves show the same MTP regime on
+both sides. Bonsai decode serving (MTP/graphs) is roadmap, not claim.
+
+## Validated prefill range (bisected 7 Oct)
+
+Full-model prefill is green for T≤64 and fails at T=65 with
+`causal_softmax_attention: invalid execution envelope or table` — identically with
+the gate OFF, i.e. a pre-existing upstream envelope, not P1. Kernel-level oracles
+cover T to 128; the T=65+ full-model path is active work.
 
 ## Ornith quality (dynamic W4A4)
 
