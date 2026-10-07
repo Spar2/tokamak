@@ -83,15 +83,27 @@ perplexity GW 6.220 → W4A16 6.327 → dynamic 6.367. The draft head stays Q4 o
 the heads work measured Q4→NVFP4 as parity-or-loss (620 vs 647 µs at 131072×4096;
 design note in the `ornith-9b-nvfp4` history).
 
-### Ours vs orig, in tok/s (end to end)
+### Ours vs orig at 64k context, matched runs (C1, greedy)
 
-![End-to-end tok/s](docs/tokamak/charts/end-to-end-toks.svg)
+Same 60,738-token prompt, 64k context, int8 KV, prefill chunk 4096, 256 output tokens —
+only the weights and the MTP switch differ:
 
-| Setup | Orig | This fork | Honest notes |
-|---|---|---:|---|
-| Ornith C1 per-request decode, MTP | 108.2 tok/s (upstream, 25.6k prompt) | 165 tok/s (camp median, 1953 prompt) | different corpora — op-level widths above are the apples-to-apples proof |
-| Ornith C8 aggregate decode, MTP | 309.9 tok/s (upstream) | 321 tok/s (dynfull wave) | same MTP regime, different corpora |
-| Bonsai decode | 38–40 tok/s (llama.cpp/Prism PQ2 serve) | 13.3 tok/s/lane (correctness harness, no MTP/graphs) | different harnesses — decode serving is on our roadmap, not our claim |
+![Ornith 64k prefill](docs/tokamak/charts/ornith-64k-prefill.svg)
+![Ornith 64k decode](docs/tokamak/charts/ornith-64k-decode.svg)
+
+| Setup @64k | groupwise-int (orig) | NVFP4 (this fork) |
+|---|---|---:|
+| Prefill, MTP off | 2.32k tok/s | **3.88k tok/s (+67%)** |
+| Decode, MTP off | 64.4 tok/s | **68.6 tok/s (+6%)** |
+| Decode, MTP3 (accept ~47–50%) | 98.0 tok/s | **112.2 tok/s (+14%)** |
+
+Wider context (different corpora/harnesses — direction, not races):
+
+| Setup | Orig | This fork |
+|---|---|---:|
+| Ornith C8 aggregate decode, MTP | 309.9 tok/s committed (upstream, 25–27k prompts) | 321 tok/s (dynfull wave, 1953-prompt corpus) |
+| Bonsai decode | 38–40 tok/s (llama.cpp/Prism PQ2 serve, 8–32k ctx) | 13.3 tok/s/lane (bq2 correctness harness, no MTP/graphs) |
+| Bonsai prefill | 700–800 tok/s @8k prompt (llama.cpp/Prism PQ2) | 32/66/61/150 tok/s @T8/32/33/64 (P1-SYNC) |
 
 Bonsai prefill throughput scales with prompt length; the llama point sits at a different
 length and is context, not a same-T race:
@@ -144,7 +156,8 @@ Per-track details live in each showcase branch.
 
 ## Actively working on
 
-- Prefill soak across arbitrary T (wall + device double timing) and the default-ON decision
+- Ornith serve at 64k done (this round): NVFP4 vs groupwise, MTP off + MTP3, C1 —
+  next: C4/C8 at long context if VRAM allows, then the default-ON decision
   for `NINFER_T2_PREFILL_P1` (currently OFF — legacy behavior is the default);
 - T=65+ full-model coverage (bisected 7 Oct: T=64 green, T=65 fails identically with
   the gate OFF — a pre-existing upstream attention envelope, not our kernels);

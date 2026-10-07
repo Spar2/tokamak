@@ -21,7 +21,7 @@
 | `NINFER_T2_PREFILL_P1` | unset (legacy path) | `=1` routes T≥8 prefill through P1-SYNC kernels |
 | `NINFER_ORNITH_DYNAMIC_W4A4` | full dynamic at T≥128 | `gate_only` keeps down-projection on W4A16; `0/off/no` is pure W4A16 |
 
-## Bonsai-27B prefill (full model, chain63, T=33 unless noted)
+## Bonsai-27B prefill (full model, short prompts — context = T, artifact PQ2 ternary)
 
 | Tokens | Legacy (ms) | P1-SYNC (ms) | Speedup | Note |
 |---|---:|---:|---:|---|
@@ -36,12 +36,12 @@ with `NINFER_T2_PREFILL_P1=1`).
 Determinism: `mindet` 0/1000 fails (synthetic), `mindet_art` 0/1000 (artifact weights),
 reproduced on the showcase build.
 
-## Bonsai-27B decode (T1-A, chain_gen, n=128)
+## Bonsai-27B decode (T1-A, chain_gen, n=128, short context, no MTP/graphs)
 
 min 70.07, p10 71.69, **median 75.07**, p90 80.96, max 92.29 ms/token.
 Generation bit-exact over 32 reset steps; near-ties excused: 0.
 
-## Ornith-9B MLP crossover (gate_up 24576×4096, medians, µs)
+## Ornith-9B MLP crossover (gate_up 24576×4096, medians, µs, stateless GEMM — no KV)
 
 | T | Q4-prod | NVFP4 tiled W4A16 | NVFP4 BF16-MMA |
 |---|---:|---:|---:|
@@ -87,16 +87,28 @@ down 4096×12288 — Q5-prod vs NVFP4 W4A16:
 
 ## End to end vs orig (tok/s, with corpora)
 
+Matched 64k runs (7 Oct, same 60,738-token docs prompt, 64k context, int8 KV,
+prefill chunk 4096, greedy, 256 output tokens, server `throughput`/`req done` lines):
+
+| Setup @64k | groupwise-int (orig) | NVFP4 (this fork) |
+|---|---|---:|
+| Prefill, MTP off | 2.32k tok/s (TTFT 26.2 s) | **3.88k tok/s (TTFT 15.7 s)** |
+| Decode, MTP off | 64.4 tok/s | **68.6 tok/s** |
+| Decode, MTP3 | 98.0 tok/s (accept 47.0%) | **112.2 tok/s (accept 49.7%)** |
+
+Wider context (different corpora/harnesses):
+
 | Setup | Orig | This fork |
 |---|---|---:|
 | Ornith C1 per-request decode, MTP | 108.2 (upstream, 25.6k prompt) | 165 (camp median of 4 cold singles, 1953 prompt) |
-| Ornith C8 aggregate decode, MTP | 309.9 committed (upstream) | 321 (dynfull wave, batch 8) |
-| Bonsai decode | 38–40 (llama.cpp/Prism PQ2 serve, 8–32k ctx) | 13.3/lane (bq2 correctness harness, no MTP/graphs) |
-| Bonsai prefill | 700–800 @8k prompt (llama.cpp/Prism PQ2) | 32/66/61/150 @T8/32/33/64 (P1-SYNC) |
+| Ornith C8 aggregate decode, MTP | 309.9 committed (upstream) | 321 (dynfull C8 wave) |
+| Bonsai decode | 38–40 (llama.cpp/Prism PQ2 serve, 8–32k ctx, greedy) | 13.3/lane (bq2 chain_gen, no MTP/graphs, short ctx) |
+| Bonsai prefill | 700–800 @8k prompt (llama.cpp/Prism PQ2) | 32/66/61/150 @T8/32/33/64 (P1-SYNC, short ctx) |
 
-C1/C8 corpora differ (per-request decode slows with context length), so the op-level
-widths above are the apples-to-apples proof; the waves show the same MTP regime on
-both sides. Bonsai decode serving (MTP/graphs) is roadmap, not claim.
+Bonsai full-model runs use short prompts (T≤64, the validated envelope); the 64k-context
+llama rows (PQ2 8k healthy, 32k healthy, 64k THRASH 1–8 tok/s vs PTQ 44–46) are cited from
+the in-repo research report `bonsai2-ninfer-study/final/FINAL-REPORT-RESEARCH.md`
+(§XX–XXIII, Prism fork win-cuda-13.3, identity-verified).
 
 ## Validated prefill range (bisected 7 Oct)
 
