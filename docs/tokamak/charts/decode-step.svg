@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" viewBox="0 0 720 300" role="img" aria-label="Bonsai-27B T1-A decode step latency percentiles, ms (n=128)">
+<rect x="0.5" y="0.5" width="719" height="299" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+<text x="24" y="30" font-size="15" font-weight="600" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Bonsai-27B decode step, ms (T1-A widened GEMV, n=128)</text>
+<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">RTX 5060 Ti, chain_gen with NINFER_T2_PREFILL_P1 validated tree</text>
+<line x1="156" y1="124" x2="156" y2="216" stroke="#d8dee4"/>
+<text x="156" y="234" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">70</text>
+<line x1="249" y1="124" x2="249" y2="216" stroke="#d8dee4"/>
+<text x="249" y="234" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">75</text>
+<line x1="342" y1="124" x2="342" y2="216" stroke="#d8dee4"/>
+<text x="342" y="234" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">80</text>
+<line x1="434" y1="124" x2="434" y2="216" stroke="#d8dee4"/>
+<text x="434" y="234" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">85</text>
+<line x1="526" y1="124" x2="526" y2="216" stroke="#d8dee4"/>
+<text x="526" y="234" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">90</text>
+<line x1="619" y1="124" x2="619" y2="216" stroke="#d8dee4"/>
+<text x="619" y="234" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">95</text>
+<line x1="158" y1="170" x2="569" y2="170" stroke="#24292f" stroke-width="2"/>
+<line x1="158" y1="156" x2="158" y2="184" stroke="#24292f" stroke-width="2"/>
+<line x1="569" y1="156" x2="569" y2="184" stroke="#24292f" stroke-width="2"/>
+<rect x="188" y="148" width="171" height="44" rx="4" fill="#0969da" fill-opacity="0.25" stroke="#0969da" stroke-width="2"/>
+<line x1="250" y1="148" x2="250" y2="192" stroke="#0969da" stroke-width="3"/>
+<text x="158" y="136" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">min 70.07</text>
+<text x="188" y="208" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">p10 71.69</text>
+<text x="250" y="136" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">median 75.07</text>
+<text x="359" y="208" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">p90 80.96</text>
+<text x="569" y="136" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">max 92.29</text>
+<rect x="24" y="280" width="12" height="12" rx="2" fill="#0969da"/>
+<text x="41" y="290" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">p10-p90 box, median tick, min-max whiskers</text>
+</svg>

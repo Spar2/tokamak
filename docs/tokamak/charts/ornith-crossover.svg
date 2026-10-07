@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" viewBox="0 0 720 400" role="img" aria-label="Ornith gate_up us vs tokens: Q4 vs NVFP4-W4A16 vs MMA (log-log)">
+<rect x="0.5" y="0.5" width="719" height="399" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+<text x="24" y="30" font-size="15" font-weight="600" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Ornith gate_up 24576x4096 latency, us (log-log, lower is better)</text>
+<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Tiled W4A16 collapses past T=16; BF16-MMA recovers T>=32 (446 us at T=32)</text>
+<line x1="64" y1="356" x2="700" y2="356" stroke="#d8dee4"/>
+<text x="56" y="360" font-size="11" text-anchor="end" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">100</text>
+<line x1="64" y1="226" x2="700" y2="226" stroke="#d8dee4"/>
+<text x="56" y="230" font-size="11" text-anchor="end" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">1,000</text>
+<line x1="64" y1="97" x2="700" y2="97" stroke="#d8dee4"/>
+<text x="56" y="101" font-size="11" text-anchor="end" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">10,000</text>
+<text x="64" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">1</text>
+<text x="135" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">2</text>
+<text x="205" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">4</text>
+<text x="276" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">8</text>
+<text x="347" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">16</text>
+<text x="417" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">32</text>
+<text x="488" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">64</text>
+<text x="559" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">128</text>
+<text x="629" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">256</text>
+<text x="700" y="374" font-size="11" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">512</text>
+<polyline points="64.0,330.7 134.7,327.2 205.3,319.4 276.0,294.6 346.7,256.6 417.3,256.3 488.0,255.3 558.7,256.3 629.3,222.8 700.0,184.5" fill="none" stroke="#1a7f37" stroke-width="2.5"/>
+<circle cx="64.0" cy="330.7" r="3.5" fill="#1a7f37"/>
+<circle cx="134.7" cy="327.2" r="3.5" fill="#1a7f37"/>
+<circle cx="205.3" cy="319.4" r="3.5" fill="#1a7f37"/>
+<circle cx="276.0" cy="294.6" r="3.5" fill="#1a7f37"/>
+<circle cx="346.7" cy="256.6" r="3.5" fill="#1a7f37"/>
+<circle cx="417.3" cy="256.3" r="3.5" fill="#1a7f37"/>
+<circle cx="488.0" cy="255.3" r="3.5" fill="#1a7f37"/>
+<circle cx="558.7" cy="256.3" r="3.5" fill="#1a7f37"/>
+<circle cx="629.3" cy="222.8" r="3.5" fill="#1a7f37"/>
+<circle cx="700.0" cy="184.5" r="3.5" fill="#1a7f37"/>
+<polyline points="64.0,339.2 134.7,336.9 205.3,329.3 276.0,305.2 346.7,275.7 417.3,238.2 488.0,200.1 558.7,161.7 629.3,122.2 700.0,82.5" fill="none" stroke="#9a6700" stroke-width="2.5"/>
+<circle cx="64.0" cy="339.2" r="3.5" fill="#9a6700"/>
+<circle cx="134.7" cy="336.9" r="3.5" fill="#9a6700"/>
+<circle cx="205.3" cy="329.3" r="3.5" fill="#9a6700"/>
+<circle cx="276.0" cy="305.2" r="3.5" fill="#9a6700"/>
+<circle cx="346.7" cy="275.7" r="3.5" fill="#9a6700"/>
+<circle cx="417.3" cy="238.2" r="3.5" fill="#9a6700"/>
+<circle cx="488.0" cy="200.1" r="3.5" fill="#9a6700"/>
+<circle cx="558.7" cy="161.7" r="3.5" fill="#9a6700"/>
+<circle cx="629.3" cy="122.2" r="3.5" fill="#9a6700"/>
+<circle cx="700.0" cy="82.5" r="3.5" fill="#9a6700"/>
+<circle cx="417.3" cy="271.0" r="5" fill="#0969da"/>
+<circle cx="488.0" cy="269.9" r="5" fill="#0969da"/>
+<circle cx="558.7" cy="244.8" r="5" fill="#0969da"/>
+<text x="427" y="291" font-size="12" font-weight="600" fill="#0969da" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">MMA (BF16, this fork)</text>
+<rect x="24" y="380" width="12" height="12" rx="2" fill="#1a7f37"/>
+<text x="41" y="390" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Q4-prod (MMA)</text>
+<rect x="171" y="380" width="12" height="12" rx="2" fill="#9a6700"/>
+<text x="188" y="390" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">NVFP4 tiled W4A16</text>
+<rect x="350" y="380" width="12" height="12" rx="2" fill="#0969da"/>
+<text x="367" y="390" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">NVFP4 BF16-MMA (this fork)</text>
+</svg>
