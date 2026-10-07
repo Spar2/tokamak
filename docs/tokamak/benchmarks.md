@@ -90,11 +90,16 @@ down 4096×12288 — Q5-prod vs NVFP4 W4A16:
 Matched 64k runs (7 Oct, same 60,738-token docs prompt, 64k context, int8 KV,
 prefill chunk 4096, greedy, 256 output tokens, server `throughput`/`req done` lines):
 
-| Setup @64k | groupwise-int (orig) | NVFP4 (this fork) |
-|---|---|---:|
-| Prefill, MTP off | 2.32k tok/s (TTFT 26.2 s) | **3.88k tok/s (TTFT 15.7 s)** |
-| Decode, MTP off | 64.4 tok/s | **68.6 tok/s** |
-| Decode, MTP3 | 98.0 tok/s (accept 47.0%) | **112.2 tok/s (accept 49.7%)** |
+| Setup @64k | llama Q4_K_M | groupwise-int (orig) | NVFP4 (this fork) | FP8-hybrid (this fork) |
+|---|---|---:|---:|---:|
+| Prefill, MTP off | 2515 tok/s | 2320 tok/s (TTFT 26.2 s) | **3880 tok/s (TTFT 15.7 s)** | 627 tok/s |
+| Decode, MTP off | 78.3 tok/s | 64.4 tok/s | **68.6 tok/s** | 66.6 tok/s |
+| Decode, MTP3 | n/a | 98.0 tok/s (accept 47.0%) | **112.2 tok/s (accept 49.7%)** | 109.9 tok/s (accept 62.4%) |
+
+llama leg: official `ornith-ai/Ornith-1.5-9B-GGUF:Q4_K_M` (5.78 GB) via local CUDA
+`llama-bench` (build df03399b8), `-p 60738 -n 256 -ngl 99`, fp16 KV, default sampling —
+same token counts, bench-generated prompt text. FP8 prefill trails (hybrid GDN path
+cost at 60k tokens); FP8 decode at parity with the highest MTP acceptance.
 
 Wider context (different corpora/harnesses):
 

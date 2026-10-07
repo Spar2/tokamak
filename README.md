@@ -91,11 +91,14 @@ only the weights and the MTP switch differ:
 ![Ornith 64k prefill](docs/tokamak/charts/ornith-64k-prefill.svg)
 ![Ornith 64k decode](docs/tokamak/charts/ornith-64k-decode.svg)
 
-| Setup @64k | groupwise-int (orig) | NVFP4 (this fork) |
-|---|---|---:|
-| Prefill, MTP off | 2.32k tok/s | **3.88k tok/s (+67%)** |
-| Decode, MTP off | 64.4 tok/s | **68.6 tok/s (+6%)** |
-| Decode, MTP3 (accept ~47–50%) | 98.0 tok/s | **112.2 tok/s (+14%)** |
+| Setup @64k | llama.cpp Q4_K_M | groupwise-int (orig) | NVFP4 (ours) | FP8-hybrid (ours) |
+|---|---|---:|---:|---:|
+| Prefill, MTP off | 2515 tok/s | 2320 tok/s | **3880 tok/s** | 627 tok/s |
+| Decode, MTP off | 78.3 tok/s | 64.4 tok/s | **68.6 tok/s** | 66.6 tok/s |
+| Decode, MTP3 | n/a (no speculation) | 98.0 tok/s (acc 47%) | **112.2 tok/s (acc 50%)** | 109.9 tok/s (acc 62%) |
+
+llama leg: `llama-bench -p 60738 -n 256` (bench-generated prompt, default sampling,
+fp16 KV, CUDA build df03399b8) — same token counts, different prompt text and KV.
 
 Wider context (different corpora/harnesses — direction, not races):
 

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="430" viewBox="0 0 720 430" role="img" aria-label="End-to-end tok/s: orig vs this fork (different harnesses - read notes)">
+<rect x="0.5" y="0.5" width="719" height="429" rx="6" fill="#ffffff" stroke="#d8dee4"/>
+<text x="24" y="30" font-size="15" font-weight="600" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">End-to-end tok/s: orig vs this fork</text>
+<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Pairs are NOT same-harness - corpora and setups differ, see table notes</text>
+<rect x="66" y="264" width="64" height="72" rx="3" fill="#8c959f"/>
+<text x="98" y="258" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">108.2</text>
+<rect x="142" y="226" width="64" height="110" rx="3" fill="#0969da"/>
+<text x="174" y="220" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">165</text>
+<text x="136" y="356" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Ornith C1</text>
+<text x="136" y="371" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">per-req</text>
+<rect x="290" y="130" width="64" height="206" rx="3" fill="#8c959f"/>
+<text x="322" y="124" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">309.9</text>
+<rect x="366" y="123" width="64" height="213" rx="3" fill="#0969da"/>
+<text x="398" y="117" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">321</text>
+<text x="360" y="356" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Ornith C8</text>
+<text x="360" y="371" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">aggregate</text>
+<rect x="514" y="310" width="64" height="26" rx="3" fill="#8c959f"/>
+<text x="546" y="304" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">39</text>
+<rect x="590" y="327" width="64" height="9" rx="3" fill="#0969da"/>
+<text x="622" y="321" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">13.3</text>
+<text x="584" y="356" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Bonsai decode</text>
+<text x="584" y="371" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">tok/s/lane</text>
+<rect x="24" y="408" width="12" height="12" rx="2" fill="#8c959f"/>
+<text x="41" y="418" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">orig (upstream / llama.cpp)</text>
+<rect x="283" y="408" width="12" height="12" rx="2" fill="#0969da"/>
+<text x="300" y="418" font-size="12" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">this fork (measured here)</text>
+</svg>
