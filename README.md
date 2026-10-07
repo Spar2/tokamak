@@ -57,9 +57,13 @@ harnesses (`ninfer_bq2_mindet_test`, `ninfer_bq2_mindet_art_test`).
 
 ### Bonsai-27B decode step 🏠 (T1-A widened GEMV, n=128, ≈13.3 tok/s/lane)
 
-![Decode step percentiles](docs/tokamak/charts/decode-step.svg)
+![Bonsai T=1 GEMV medians](docs/tokamak/charts/bonsai-decode-gemv.svg)
 
-Median **75.07 ms/token** (min 70.07, p90 80.96). Generation is bit-exact across 32 reset steps.
+Median step **75.07 ms** (min 70.07, p90 80.96), bit-exact across 32 reset steps.
+GEMV work is ≈22 ms of the step (vocab head 2.25 ms once per step dominates);
+the rest is GDN recurrent kernels, attention, norms, and eager launches with no
+CUDA graphs — see diagnosis in benchmarks. No orig bar here: decode serving
+(MTP/graphs) is roadmap, this chart is our capability baseline.
 
 ### Ornith-9B MLP: T-crossover 🌐 (gate_up 24576×4096, µs medians)
 

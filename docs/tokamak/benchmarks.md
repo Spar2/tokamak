@@ -41,6 +41,12 @@ reproduced on the showcase build.
 min 70.07, p10 71.69, **median 75.07**, p90 80.96, max 92.29 ms/token.
 Generation bit-exact over 32 reset steps; near-ties excused: 0.
 
+T=1 GEMV medians by projection (m7_micro, ms): head 248320×5120 **2.2536** (once per
+step), fd 0.1168, qkv 0.0658, fg 0.0649, fu 0.0641, attn_q 0.0635, attn_wo 0.0475,
+so 0.0465, gate 0.0406, attn_k 0.0400, attn_v 0.0418, fwht 0.0071. GEMV totals ≈22 ms
+of the 75 ms step; the remainder (recurrent/attention/norms/launch) is uninstrumented
+(ncu blocked: no perf-counter permission in containers).
+
 ## Ornith-9B MLP crossover (gate_up 24576×4096, medians, µs, stateless GEMM — no KV)
 
 | T | Q4-prod | NVFP4 tiled W4A16 | NVFP4 BF16-MMA |
