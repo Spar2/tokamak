@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" role="img" aria-label="Bonsai-27B prefill latency: legacy vs P1-SYNC (ms)">
 <rect x="0.5" y="0.5" width="719" height="379" rx="6" fill="#ffffff" stroke="#d8dee4"/>
 <text x="24" y="30" font-size="15" font-weight="600" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">Bonsai-27B prefill latency, ms (lower is better)</text>
-<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">RTX 5060 Ti 16GB, SM120a, CUDA 13.1, gate NINFER_T2_PREFILL_P1=1, device-time medians</text>
+<text x="24" y="48" font-size="12" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">RTX 5060 Ti 16GB, SM120a, CUDA 13.1, gate NINFER_T2_PREFILL_P1=1, device-time medians; ≈ = approx</text>
 <rect x="52" y="295" width="52" height="41" rx="3" fill="#8c959f"/>
 <text x="78" y="289" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">548</text>
 <rect x="112" y="317" width="52" height="19" rx="3" fill="#0969da"/>
@@ -19,7 +19,7 @@
 <rect x="388" y="194" width="52" height="142" rx="3" fill="#8c959f"/>
 <text x="414" y="188" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">≈1900</text>
 <rect x="448" y="296" width="52" height="40" rx="3" fill="#0969da"/>
-<text x="474" y="290" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">≈540</text>
+<text x="474" y="290" font-size="12" text-anchor="middle" fill="#24292f" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">540</text>
 <text x="444" y="356" font-size="12" text-anchor="middle" fill="#57606a" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">T=33</text>
 <rect x="418" y="76" width="52" height="20" rx="10" fill="#1a7f37"/>
 <text x="444" y="91" font-size="12" font-weight="700" text-anchor="middle" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">3.5x</text>

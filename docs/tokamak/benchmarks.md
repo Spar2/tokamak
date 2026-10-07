@@ -53,16 +53,19 @@ Generation bit-exact over 32 reset steps; near-ties excused: 0.
 | 32 | 588.9 | 812.1 | **453** |
 | 64 | 599.1 | 1597.4 | **462** |
 | 128 | 588.4 | 3161.5 | **722** |
+| 256 | 1068.1 | 6378.8 | — (MMA not swept; tiled path stays off past T=32) |
+| 512 | 2109.6 | 12918.1 | — |
 
 MMA column: `notes/large-t-w4a16-mma.md` qualification runs (same rig, warmup 5 /
 repeat 20 series extended). `down` 4096×12288 from the same note: T=32 Q5 333 vs
 MMA 360, T=64 Q5 340 vs MMA **292**, T=128 Q5 337 vs MMA 422.
 
-`down` 4096×12288 behaves the same way (Q5 vs W4A16, MMA recovers T≥32: 410.6 → 360,
-still trailing Q5's 339 at T=32, ahead at T=64: 292 vs 340).
-Raw series: `results/crossover_gate_up.csv`, `results/crossover_down.csv` on the
-`experiment/ornith-dynamic-w4a4` branch; MMA rows from the qualification note
-`notes/large-t-w4a16-mma.md` (rerun 7 Oct confirmed gate_up T=32 at 446, ≈1.5%).
+`down` 4096×12288 from the same note: T=32 Q5 333 vs MMA 360 (still trailing),
+T=64 Q5 340 vs MMA **292**, T=128 Q5 337 vs MMA 422.
+Raw tiled series: `results/crossover_gate_up.csv`, `results/crossover_down.csv` on the
+`experiment/ornith-dynamic-w4a4` branch (warmup 5, repeat 20); MMA column from the
+qualification note `notes/large-t-w4a16-mma.md` (same campaign). An independent rerun
+on 7 Oct (warmup 20, repeat 50) confirmed gate_up T=32 at 446 (≈1.5%).
 
 ## Ornith quality (dynamic W4A4)
 
