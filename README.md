@@ -57,13 +57,11 @@ harnesses (`ninfer_bq2_mindet_test`, `ninfer_bq2_mindet_art_test`).
 
 ### Bonsai-27B decode step 🏠 (T1-A widened GEMV, n=128, ≈13.3 tok/s/lane)
 
-![Bonsai T=1 GEMV medians](docs/tokamak/charts/bonsai-decode-gemv.svg)
-
 Median step **75.07 ms** (min 70.07, p90 80.96), bit-exact across 32 reset steps.
-GEMV work is ≈22 ms of the step (vocab head 2.25 ms once per step dominates);
+A per-projection GEMV budget (≈22 ms of the step) is tabulated in
+[benchmarks](docs/tokamak/benchmarks.md#bonsai-27b-decode-t1-a-chain_gen-n128-short-context-no-mtpgraphs);
 the rest is GDN recurrent kernels, attention, norms, and eager launches with no
-CUDA graphs — see diagnosis in benchmarks. No orig bar here: decode serving
-(MTP/graphs) is roadmap, this chart is our capability baseline.
+CUDA graphs — decode serving (MTP/graphs) is roadmap, not claim.
 
 ### Ornith-9B MLP: T-crossover 🌐 (gate_up 24576×4096, µs medians)
 
@@ -113,13 +111,8 @@ Wider context (different corpora/harnesses — direction, not races):
 | Bonsai prefill | 700–800 tok/s @8k prompt (llama.cpp/Prism PQ2, context) | 32/66/61/150 tok/s @T8/32/33/64 (P1-SYNC) |
 
 Bonsai decode serving (MTP/graphs) is roadmap, not claim — see diagnosis in
-[benchmarks](docs/tokamak/benchmarks.md#bonsai-decode-75-msstep-why-not-faster-yet).
+[benchmarks](docs/tokamak/benchmarks.md#diagnosed-gaps-not-displayed-as-wins).
 FP8 prefill likewise (per-token serial cost isolated, fused batching in progress).
-
-Bonsai prefill throughput scales with prompt length; the llama point sits at a different
-length and is context, not a same-T race:
-
-![Bonsai prefill tok/s vs length](docs/tokamak/charts/bonsai-prefill-toks.svg)
 
 <details>
 <summary>Glossary for readers new to NInfer</summary>
