@@ -49,6 +49,12 @@ measured in Linux containers on this host. Methodology and full tables:
 
 ![Bonsai prefill speedup](docs/tokamak/charts/bonsai-prefill-speedup.svg)
 
+The masked kernel behind those bars scales from 8-token micro-batches to
+64k-token prompts with a flat oracle error — so the prefill story is not
+"a few tokens":
+
+![P1 masked GEMM scales to 64k tokens](docs/tokamak/charts/bonsai-masked-scale.svg)
+
 Numerics *improved* over legacy (chain63, T=33): layer-52 maxabs 9.60 (legacy FAIL) →
 1.25 (P1 PASS) — archived `bq2/chain63-all.log` vs `bq2/chain63_AUTH_ON2.log.`
 Top-1 exact at T=32 (`506 == 506`) and T=33 (`271 == 271`).
@@ -118,6 +124,9 @@ FP8 prefill likewise (per-token serial cost isolated, fused batching in progress
 <summary>Glossary for readers new to NInfer</summary>
 
 - **T** — number of tokens processed in one call (prefill length / batch width).
+  Not to confuse with the context window: our GEMM kernels are proven to 64k-token
+  calls, full-model Ornith serve runs at 64k context, Bonsai full-model serve tops
+  at 64 tokens (attention envelope — see below).
 - **Prefill / decode** — prompt processing (compute-bound) vs token-by-token generation
   (memory-bound). tok/s numbers above are prefill throughput unless noted.
 - **P1-SYNC** — our deterministic prefill kernel path (CTA-local decode to shared BF16,

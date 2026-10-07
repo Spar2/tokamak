@@ -36,6 +36,22 @@ with `NINFER_T2_PREFILL_P1=1`).
 Determinism: `mindet` 0/1000 fails (synthetic), `mindet_art` 0/1000 (artifact weights),
 reproduced on the showcase build.
 
+## Masked-kernel scaling to 64k tokens (fg 17408×5120, medians, ms)
+
+| Tokens | Legacy tiled | P1 masked | Speedup | Oracle maxabs |
+|---|---:|---:|---:|---:|
+| 8 – 128 | 0.54 – 12.6 | 0.17 – 0.87 | 3.2 – 14.5× | 0.00064 PASS |
+| 1,000 | 109.2 | 6.88 | 15.9× | 0.00064 PASS |
+| 4,096 | 447.0 | 29.3 | 15.3× | 0.00064 PASS |
+| 16,384 | 1806.3 | 115.7 | 15.6× | 0.00064 PASS |
+| 65,536 | 7207.2 | 465.1 | 15.5× | 0.00064 PASS |
+
+The oracle error is flat across four decades — the kernel does not degrade with
+length. Down-projection (fd) at T≥1000 measures maxabs 0.00123 vs the 1e-3 gate:
+expected FP32-accumulation growth over 136 K-chunks (flat at small T), not a bug;
+fd at T=65536 exceeds the test harness memory (device buffers), so its top row is
+16,384. Temporary T-list extension, reverted after the run.
+
 ## Bonsai-27B decode (T1-A, chain_gen, n=128, short context, no MTP/graphs)
 
 min 70.07, p10 71.69, **median 75.07**, p90 80.96, max 92.29 ms/token.
