@@ -22,8 +22,8 @@ everything we did lives in the branches below.
 |---|---|---|---|
 | Bonsai-27B ternary prefill/decode | [`bonsai-27b`](https://github.com/Spar2/tokamak/tree/bonsai-27b) | P1-SYNC prefill kernels (2.2–6.8×), T1-A decode (~75 ms/step), Prism-validated M6 core | ✅ Validated, gated OFF by default |
 | Ornith-9B NVFP4 | [`ornith-9b-nvfp4`](https://github.com/Spar2/tokamak/tree/ornith-9b-nvfp4) | Dynamic W4A4 prefill, BF16-MMA large-T, native output head | ✅ Validated |
-| Ornith-9B FP8 GDN | [`ornith-9b-fp8`](https://github.com/Spar2/tokamak/tree/ornith-9b-fp8) | Hybrid FP8 gated-delta-net execution, scale contract | ✅ Validated (contract + regression tests) |
-| Concurrency 8 → 9 | [`c16-concurrency-9`](https://github.com/Spar2/tokamak/tree/c16-concurrency-9) | Batch ceiling raise + C9TRACE scheduler diagnostics | ✅ Validated (5 test binaries green, no throughput claim) |
+| Ornith-9B FP8 GDN | [`ornith-9b-fp8`](https://github.com/Spar2/tokamak/tree/ornith-9b-fp8) | Hybrid FP8 gated-delta-net execution, scale contract | ✅ Validated (contract + 64k serve smoke) |
+| Concurrency 8 → 9 | [`c16-concurrency-9`](https://github.com/Spar2/tokamak/tree/c16-concurrency-9) | Batch ceiling raise + C9TRACE scheduler diagnostics | ✅ Validated (B=9 unit + decode-ready-9 serve proof) |
 
 Full day-by-day history (13 Sep → 6 Oct 2026) is preserved in the `exp/*`, `experiment/*`,
 `feature/*`, and `perf/*` branches — nothing was squashed or rebased. See

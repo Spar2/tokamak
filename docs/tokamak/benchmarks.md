@@ -129,16 +129,32 @@ cover T to 128; the T=65+ full-model path is active work.
 - Acceptance, 11 prompts (greedy only; stochastic decoding unmeasured): dynamic mean
   −3.5pp vs W4A16, worst lane parity.
 
-## Ornith FP8 GDN (contract proof, no throughput claim yet)
+## Ornith FP8 GDN (hybrid execution, first end-to-end proof 7 Oct)
 
-- `ninfer_linear_fp8_modelopt_contract_test`: static-vs-A16 broadcast rel 0.025 — OK;
-- `ninfer_linear_nvfp4_a16_test` regression on the same build — OK
-  (heads geometries 248320/131072 vs exact-dequant oracle, T=1..32).
+Serve smoke on the reconverted artifact (`ornith_fp8gdn_full_v3`, 829 objects):
+same 60,738-token prompt, 64k context, int8 KV, greedy, 256 output tokens:
 
-## Concurrency-9
+| Setup @64k | FP8-hybrid |
+|---|---:|
+| Prefill, MTP off | 627 tok/s |
+| Decode, MTP off | 66.6 tok/s |
+| Decode, MTP3 | 109.9 tok/s (accept 62.4%) |
 
-No throughput claim — this track raises the batch ceiling (8→9) across GDN replay,
-attention cache, engine, and serve layers, with B=9 oracle cases green in
-`gated_delta_net`, `gdn_replay_records`, `gdn_input_proj_conv_record`,
-`gated_delta_net_replay_record`, and `softmax_attention` tests, plus C9TRACE
-scheduler diagnostics for 9-wide debugging.
+FP8 prefill trails (hybrid GDN path cost at 60k tokens); FP8 decode at parity with
+the highest MTP acceptance of the three runtimes. The v3 artifact was converted
+with the ported preserver (`exp/ornith-fp8-heads-port`); the pre-port artifact
+could not bind (`text/output_head` contract, fail-fast by design).
+
+## Concurrency-9 (end-to-end proof 7 Oct)
+
+Beyond unit tests: 9 concurrent short requests against the c16 build
+(`--max-concurrency 9`, groupwise artifact) — startup accepts 9 (old code threw),
+all 9 admitted, and the scheduler formed **decode-ready 9**:
+
+`C9TRACE boundary membership=9 slots= 0:11/decode-ready ... 8:19/decode-ready
+ready-lanes=0,1,2,3,4,5,6,7,8`
+
+All 9 requests completed. No throughput claim — this track raises the batch ceiling
+(B=9 oracle cases green in `gated_delta_net`, `gdn_replay_records`,
+`gdn_input_proj_conv_record`, `gated_delta_net_replay_record`, and
+`softmax_attention` tests) plus C9TRACE scheduler diagnostics for 9-wide debugging.
